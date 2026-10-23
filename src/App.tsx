@@ -18,12 +18,15 @@ const MainContent: React.FC = () => {
     currentProject,
     toast,
     setDroppedFile,
+    setCurrentProject,
+    setActiveTab,
     showToast,
   } = useApp();
 
   const [isWindowDragging, setIsWindowDragging] = useState(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const dragCounter = useRef(0);
+  useEffect(() => { setIsManualModalOpen(false); }, [currentProject?.id]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -60,6 +63,8 @@ const MainContent: React.FC = () => {
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
         if (file.type.startsWith('image/')) {
+          setCurrentProject(null);
+          setActiveTab('search');
           setDroppedFile(file);
         } else {
           showToast('يرجى إفلات ملف صورة صالح (PNG, JPG, WebP)', 'error');
@@ -75,6 +80,8 @@ const MainContent: React.FC = () => {
         if (items[i].type.startsWith('image/')) {
           const file = items[i].getAsFile();
           if (file) {
+            setCurrentProject(null);
+            setActiveTab('search');
             setDroppedFile(file);
             break;
           }
@@ -136,10 +143,11 @@ const MainContent: React.FC = () => {
           ) : (
             <div className="space-y-4">
               <JobProgress
+                key={currentProject.id}
                 project={currentProject}
                 onOpenManualModal={() => setIsManualModalOpen(true)}
               />
-              <ResultsGallery project={currentProject} />
+              <ResultsGallery key={currentProject.id} project={currentProject} />
             </div>
           )
         ) : (
@@ -148,6 +156,7 @@ const MainContent: React.FC = () => {
       </main>
 
       <ManualLinkModal
+        key={currentProject?.id || 'new'}
         isOpen={isManualModalOpen}
         onClose={() => setIsManualModalOpen(false)}
         projectId={currentProject?.id}

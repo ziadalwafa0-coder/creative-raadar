@@ -2,9 +2,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext.tsx';
 import { Upload, X, RefreshCw, Video, Image as ImageIcon, Layers } from 'lucide-react';
 import { Project } from '../types/index.ts';
+import { RequestScope } from '../utils/requestScope.ts';
 
 export const HomeSearchCard: React.FC = () => {
-  const { setCurrentProject, setActiveTab, showToast, apiFetch, droppedFile, setDroppedFile } = useApp();
+  const { commitProject, getSelectionEpoch, setActiveTab, showToast, apiFetch, droppedFile, setDroppedFile } = useApp();
 
   const [productName, setProductName] = useState('');
   const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('both');
@@ -16,6 +17,10 @@ export const HomeSearchCard: React.FC = () => {
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageReadScope = useRef(new RequestScope());
+  const submitLock = useRef(false);
+  const [isReadingImage, setIsReadingImage] = useState(false);
+  useEffect(() => () => { imageReadScope.current.invalidate(); }, []);
 
   const handleImageFile = (file?: File) => {
     if (!file) return;
@@ -24,9 +29,15 @@ export const HomeSearchCard: React.FC = () => {
       return;
     }
     setValidationError(null);
+    const readEpoch = imageReadScope.current.invalidate();
+    setImagePreview(null);
+    setIsReadingImage(true);
     const reader = new FileReader();
     reader.onloadend = () => {
-      setImagePreview(reader.result as string);
+      if (!imageReadScope.current.accepts(readEpoch)) return;
+      setIsReadingImage(false);
+      if (typeof reader.result === 'string') setImagePreview(reader.result);
+      else setValidationError('تعذر قراءة الصورة. أعد رفعها.');
     };
     reader.readAsDataURL(file);
   };
@@ -44,6 +55,7 @@ export const HomeSearchCard: React.FC = () => {
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
     handleImageFile(e.dataTransfer.files?.[0]);
   };
@@ -56,6 +68,8 @@ export const HomeSearchCard: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLock.current || isReadingImage) return;
+    const epoch = getSelectionEpoch();
     const trimmed = productName.trim();
 
     if (!trimmed && !imagePreview) {
@@ -65,6 +79,7 @@ export const HomeSearchCard: React.FC = () => {
 
     setValidationError(null);
     setIsSubmitting(true);
+    submitLock.current = true;
 
     const isUrl = /^https?:\/\//i.test(trimmed);
     const safeVideoCount = clampCount(targetVideoInput);
@@ -107,21 +122,24 @@ export const HomeSearchCard: React.FC = () => {
       }
 
       const project = await res.json();
-      setCurrentProject(project);
+      if (!commitProject(project, epoch)) return;
       setActiveTab('search');
 
-      await apiFetch(`/api/projects/${project.id}/search`, {
+      const searchResponse = await apiFetch(`/api/projects/${project.id}/search`, {
         method: 'POST',
       });
+      if (!searchResponse.ok) throw new Error('تعذر بدء البحث');
+      if (getSelectionEpoch() !== epoch) return;
 
       const updatedRes = await apiFetch(`/api/projects/${project.id}`);
       if (updatedRes.ok) {
         const updatedProj = await updatedRes.json();
-        setCurrentProject(updatedProj);
+        commitProject(updatedProj, epoch);
       }
     } catch (error: any) {
-      showToast(error.message || 'حدث خطأ أثناء بدء البحث', 'error');
+      if (getSelectionEpoch() === epoch) showToast(error.message || 'حدث خطأ أثناء بدء البحث', 'error');
     } finally {
+      submitLock.current = false;
       setIsSubmitting(false);
     }
   };
@@ -197,6 +215,8 @@ export const HomeSearchCard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
+                    imageReadScope.current.invalidate();
+                    setIsReadingImage(false);
                     setImagePreview(null);
                     if (fileInputRef.current) fileInputRef.current.value = '';
                   }}
@@ -334,7 +354,7 @@ export const HomeSearchCard: React.FC = () => {
         {/* 5) Single Primary Button: ابدأ البحث */}
         <button
           type="submit"
-          disabled={isSubmitting}
+          disabled={isSubmitting || isReadingImage}
           className="w-full h-12 rounded-xl bg-[#247C72] hover:bg-[#1E665E] disabled:opacity-60 text-white font-semibold text-sm transition-colors flex items-center justify-center cursor-pointer"
         >
           {isSubmitting ? 'جاري بدء البحث...' : 'ابدأ البحث'}

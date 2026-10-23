@@ -9,6 +9,7 @@ import { ProviderRegistry } from './src/server/connectors/ProviderRegistry.ts';
 import { analyzeProductImage, isGeminiConfigured } from './src/server/gemini.ts';
 import { streamExportArchive } from './src/server/exporter.ts';
 import { Project, SearchSettings } from './src/types/index.ts';
+import { prepareSearchIdentity, productInputFingerprint } from './src/utils/productIdentity.ts';
 import {
   verifyAccessCode,
   getRateLimitKey,
@@ -24,7 +25,7 @@ import {
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -265,6 +266,7 @@ app.post('/api/projects', requireAuth, (req: Request, res: Response) => {
     candidates: [],
   };
 
+  prepareSearchIdentity(newProject);
   storage.upsertProject(newProject);
   res.status(201).json(newProject);
 });
@@ -285,17 +287,24 @@ app.patch('/api/projects/:id', requireAuth, (req: Request, res: Response) => {
     return res.status(404).json({ error: 'المشروع غير موجود أو لا تملك صلاحية الوصول إليه' });
   }
 
-  if (req.body.productProfile) {
-    project.productProfile = req.body.productProfile;
-  }
+  if (worker.isRunning(project.id)) return res.status(409).json({error: 'أوقف البحث وانتظر انتهاءه قبل تعديل المنتج'});
+  prepareSearchIdentity(project);
   if (req.body.name) {
     project.name = req.body.name;
   }
+  if (Array.isArray(req.body.referenceImages)) project.referenceImages = req.body.referenceImages;
+  if (typeof req.body.productListingUrl === 'string') project.productListingUrl = req.body.productListingUrl;
+  if (typeof req.body.userNotes === 'string') project.userNotes = req.body.userNotes;
+  const previousFingerprint = project.searchInputFingerprint;
+  prepareSearchIdentity(project);
+  if (req.body.productProfile && previousFingerprint === project.searchInputFingerprint) project.productProfile = req.body.productProfile;
   if (req.body.settings) {
     project.settings = { ...project.settings, ...req.body.settings };
   }
   if (req.body.candidates) {
-    project.candidates = req.body.candidates;
+    // Only update existing assets; a client cannot inject another project's results.
+    const changes = new Map((Array.isArray(req.body.candidates) ? req.body.candidates : []).map((c: any) => [c.id, c]));
+    project.candidates = project.candidates.map(c => changes.has(c.id) ? {...c, selectedForExport: Boolean((changes.get(c.id) as any).selectedForExport)} : c);
   }
   if (req.body.targetVideoCount !== undefined) {
     project.targetVideoCount = Math.min(500, Math.max(1, Number(req.body.targetVideoCount) || 10));
@@ -324,6 +333,8 @@ app.post('/api/projects/:id/analyze', requireAuth, async (req: Request, res: Res
     return res.status(404).json({ error: 'المشروع غير موجود' });
   }
 
+  if (worker.isRunning(project.id)) return res.status(409).json({error: 'البحث قيد التشغيل'});
+  const fingerprint = prepareSearchIdentity(project);
   const refImg = project.referenceImages[0];
   if (!refImg?.base64Data) {
     return res.status(400).json({ error: 'No image uploaded' });
@@ -336,6 +347,7 @@ app.post('/api/projects/:id/analyze', requireAuth, async (req: Request, res: Res
       project.userNotes,
       project.productListingUrl
     );
+    if (productInputFingerprint(project) !== fingerprint || worker.isRunning(project.id)) return res.status(409).json({error: 'تغيّر المنتج أثناء التحليل؛ أعد المحاولة'});
     project.productProfile = profile;
     project.logs.push({
       timestamp: new Date().toISOString(),
@@ -357,6 +369,7 @@ app.post('/api/projects/:id/search', requireAuth, async (req: Request, res: Resp
     return res.status(404).json({ error: 'المشروع غير موجود' });
   }
 
+  if (worker.isRunning(project.id)) return res.status(409).json({error: 'الطلب السابق لم ينته بعد؛ انتظر ثم أعد المحاولة'});
   if (req.body?.targetVideoCount !== undefined) {
     project.targetVideoCount = Math.min(500, Math.max(1, Number(req.body.targetVideoCount) || 10));
     storage.upsertProject(project);

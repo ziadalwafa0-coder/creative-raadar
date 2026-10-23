@@ -21,6 +21,7 @@ import { isQuotaExhaustedError, isTransientUnavailableError } from './geminiRetr
 import { isSafeExternalUrl, computeSha256 } from '../utils/security.ts';
 import { isDuplicateCandidate, matchesStrictness, matchesMediaType, normalizeUrl } from '../utils/rules.ts';
 import { downloadMedia } from './downloader.ts';
+import { prepareSearchIdentity } from '../utils/productIdentity.ts';
 import {
   AMAZON_US_HEADERS,
   AMAZON_US_PRODUCT_PAGE_HEADERS,
@@ -35,7 +36,7 @@ import {
   ExtractedAmazonVideo
 } from './amazonUs.ts';
 
-const DOWNLOADS_DIR = path.resolve(process.cwd(), '.data', 'downloads');
+const DOWNLOADS_DIR = path.join(path.resolve(process.env.CREATIVE_RADAAR_DATA_DIR || path.join(process.cwd(), '.data')), 'downloads');
 
 // In-memory extraction cache (15 minutes TTL) to avoid re-fetching identical product/review pages
 const EXTRACTION_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -405,6 +406,10 @@ export class JobWorker {
     return this.lastTimings.get(projectId);
   }
 
+  public isRunning(projectId: string): boolean {
+    return this.activeJobs.has(projectId);
+  }
+
   public registerSseClient(projectId: string, res: Response): void {
     if (!this.sseClients.has(projectId)) {
       this.sseClients.set(projectId, new Set());
@@ -432,13 +437,11 @@ export class JobWorker {
 
   public cancelJob(projectId: string): void {
     this.cancelledJobs.add(projectId);
-    this.activeJobs.delete(projectId);
     const controller = this.jobAbortControllers.get(projectId);
     if (controller) {
       try {
         controller.abort();
       } catch {}
-      this.jobAbortControllers.delete(projectId);
     }
 
     const storage = StorageService.getInstance();
@@ -478,6 +481,7 @@ export class JobWorker {
     }
 
     const cleanSourceUrl = normalizeUrl(payload.sourceUrl);
+    const fingerprint = prepareSearchIdentity(project);
     if (!cleanSourceUrl.startsWith('http://') && !cleanSourceUrl.startsWith('https://')) {
       throw new Error('يرجى إدخال رابط صالح يبدأ بـ http:// أو https://');
     }
@@ -513,6 +517,7 @@ export class JobWorker {
     const isAmazon = cleanSourceUrl.includes('amazon.');
 
     const candidate: CandidateAsset = {
+      searchInputFingerprint: fingerprint,
       id: assetId,
       projectId: project.id,
       title:
@@ -600,6 +605,9 @@ export class JobWorker {
       candidate.sha256 = computeSha256(cleanSourceUrl);
     }
 
+    if (!storage.getProject(projectId) || prepareSearchIdentity(storage.getProject(projectId)!) !== fingerprint) {
+      throw new Error('تغيّر المنتج أثناء إضافة الرابط؛ أعد الإضافة للمنتج الحالي');
+    }
     project.candidates.unshift(candidate);
     project.counters.candidatesDiscovered = project.candidates.length;
     project.counters.sourcesInspected = project.candidates.length;
@@ -625,6 +633,7 @@ export class JobWorker {
     if (this.activeJobs.has(projectId)) {
       return; // already running
     }
+    const searchFingerprint = prepareSearchIdentity(project);
 
     const abortController = new AbortController();
     this.activeJobs.add(projectId);
@@ -639,6 +648,7 @@ export class JobWorker {
       message: string,
       level: 'info' | 'warn' | 'error' | 'success' = 'info'
     ) => {
+      if (isCancelled()) return;
       project.jobState = state;
       project.logs.push({
         timestamp: new Date().toISOString(),
@@ -692,12 +702,17 @@ export class JobWorker {
         }
       }
 
+      if (refImg && !directMediaInput && (!refBase64 || !isGeminiConfigured())) {
+        updateState('needs_configuration', !refBase64 ? 'تعذر قراءة الصورة المرجعية؛ أعد رفعها قبل البحث.' : 'يلزم ضبط GEMINI_API_KEY للتحقق من مطابقة الصورة؛ لم يتم قبول نتائج بالعنوان فقط.', 'warn');
+        return;
+      }
+
       if (
         !directMediaInput &&
         (!project.productProfile || (refBase64 && project.productProfile.confidence === 'low'))
       ) {
         if (refBase64 && isGeminiConfigured()) {
-          updateState('analyzing', 'جاري فحص صورة المنتج المرفوعة وتحديد مواصفاته بدقة 100%...');
+          updateState('analyzing', 'جاري فحص صورة المنتج المرفوعة وتحديد مواصفاته...');
           try {
             project.productProfile = await analyzeProductImage(
               refBase64,
@@ -706,9 +721,7 @@ export class JobWorker {
               project.productListingUrl,
               project.name
             );
-            if (!project.name || project.name.trim() === 'بحث بالصورة') {
-              project.name = project.productProfile.suggestedNameAr || project.name;
-            }
+            if (isCancelled()) return;
             updateState(
               'analyzing',
               `تم فحص المنتج وتحديد هيكله: "${project.productProfile.suggestedNameAr}"`,
@@ -765,7 +778,7 @@ export class JobWorker {
       // ==========================================
       updateState(
         'searching',
-        'جاري الدخول على أمازون أمريكا وفحص الفيديوهات الإيجابية للمنتج المطابق 100% فقط...'
+        'جاري البحث على أمازون أمريكا وفحص مطابقة المنتجات وبيانات المراجعات...'
       );
 
       const discoveredCandidates: Partial<CandidateAsset>[] = [];
@@ -948,7 +961,7 @@ export class JobWorker {
                     approved: true,
                     matchCategory: 'exact_design',
                     matchScore: 98,
-                    userFacingLabelAr: 'نفس المنتج (تطابق 100%)',
+                    userFacingLabelAr: 'صفحة المنتج المحددة بواسطة المستخدم',
                     reasonAr: 'صفحة المنتج المرفوعة مباشرة من المستخدم',
                   },
                 });
@@ -972,9 +985,9 @@ export class JobWorker {
                 fallbackVerdict: {
                   asin: cand.asin,
                   approved: true,
-                  matchCategory: 'exact_design',
+                  matchCategory: titleVerdict.matchCategory,
                   matchScore: titleVerdict.matchScore,
-                  userFacingLabelAr: 'نفس المنتج (تطابق 100%)',
+                  userFacingLabelAr: 'تطابق مبدئي بالعنوان؛ لم يُفحص بصرياً',
                   reasonAr: titleVerdict.reasonAr,
                 },
               });
@@ -1012,7 +1025,7 @@ export class JobWorker {
                 if (visualVerdicts && visualVerdicts.size > 0) {
                   for (const item of preApprovedCandidates) {
                     const v = visualVerdicts.get(item.page.asin.toUpperCase());
-                    if (v) {
+                    if (v && candidatesWithImages.find(c => c.asin === item.page.asin)?.imageBase64) {
                       if (v.approved) {
                         finalApprovedBatch.push({ page: item.page, verdict: v });
                       } else {
@@ -1021,14 +1034,13 @@ export class JobWorker {
                     }
                   }
                 } else {
-                  for (const item of preApprovedCandidates) {
-                    finalApprovedBatch.push({ page: item.page, verdict: item.fallbackVerdict });
-                  }
+                  rejectedProductsCount += preApprovedCandidates.length;
                 }
               } else {
-                for (const item of preApprovedCandidates) {
-                  finalApprovedBatch.push({ page: item.page, verdict: item.fallbackVerdict });
-                }
+                // A title is a search pre-filter, not visual identity evidence.
+                if (!refBase64) {
+                  for (const item of preApprovedCandidates) finalApprovedBatch.push({page: item.page, verdict: item.fallbackVerdict});
+                } else rejectedProductsCount += preApprovedCandidates.length;
               }
             }
 
@@ -1053,9 +1065,21 @@ export class JobWorker {
                     allowSellerDemos,
                     onlyOrganicCustomers
                   );
+                  if (isCancelled()) return;
+                  // Product-page identity alone cannot prove that every review video shows it.
+                  const thumbs = refBase64 ? await Promise.all(pageVids.map(async (v, index) => {
+                    const image = v.thumbnailUrl ? await fetchProductImageAsBase64(v.thumbnailUrl, abortController.signal) : null;
+                    return {index, title: v.title, reviewer: v.reviewerOrChannel || '', thumbBase64: image?.base64, thumbMimeType: image?.mimeType};
+                  })) : [];
+                  const videoVerdicts = refBase64 && !quotaExhaustedOccurred
+                    ? await verifyVideosPositiveAndExactMatch(refBase64, refMimeType, project.name, project.productProfile, thumbs, () => { quotaExhaustedOccurred = true; })
+                    : null;
+                  if (isCancelled()) return;
                   let addedNewOnPage = false;
 
-                  for (const v of pageVids) {
+                  for (const [videoIndex, v] of pageVids.entries()) {
+                    const videoVerdict = videoVerdicts?.get(videoIndex);
+                    if (refBase64 && (!thumbs[videoIndex]?.thumbBase64 || !videoVerdict?.approved || videoVerdict.sentiment !== 'positive')) continue;
                     if (customerReviewVideos.length >= desiredUniqueVideos) break;
 
                     // Strictly exclude creator ads / marketer demonstrations when customer_only is active
@@ -1087,11 +1111,12 @@ export class JobWorker {
                     const approvedVid: ApprovedAmazonVideo = {
                       ...v,
                       thumbnailUrl: resolvedThumb,
-                      matchCategory: 'exact_design',
+                      matchCategory: verdict.matchCategory,
                       matchScore: verdict.matchScore,
-                      userFacingMatchLabel: 'نفس المنتج (تطابق 100%)',
+                      userFacingMatchLabel: verdict.userFacingLabelAr,
                       supportingObservations: [
-                        'تقييم عميل إيجابي مؤكد لنفس المنتج 100%',
+                        'تم فحص بيانات المراجعة؛ لا يغني ذلك عن مشاهدة الفيديو كاملاً',
+                        ...(videoVerdict ? [videoVerdict.reasonAr] : []),
                         verdict.reasonAr,
                         `المنتج المطابق: ${amzPage.title.slice(0, 90)}`,
                       ],
@@ -1108,7 +1133,11 @@ export class JobWorker {
                     if (project.candidates.filter((c) => c.mediaType === 'video').length < maxVideos) {
                       const newAssetId = `ast-${project.id}-${project.candidates.length + 1}`;
                       const newAsset: CandidateAsset = {
+                        searchInputFingerprint: searchFingerprint,
                         id: newAssetId,
+                        visibleDifferences: [],
+                        unknowns: ['لم تتم مراجعة كامل محتوى الفيديو والصوت'],
+                        rightsStatus: 'unknown',
                         projectId: project.id,
                         title: approvedVid.title,
                         sourceUrl: approvedVid.sourceUrl,
@@ -1121,9 +1150,9 @@ export class JobWorker {
                         platform: 'amazon',
                         mediaType: 'video',
                         provenance: approvedVid.provenance,
-                        matchCategory: 'exact_design',
+                        matchCategory: approvedVid.matchCategory,
                         matchScore: approvedVid.matchScore,
-                        userFacingMatchLabel: 'نفس المنتج (تطابق 100%)',
+                        userFacingMatchLabel: approvedVid.userFacingMatchLabel,
                         sentiment: 'positive',
                         supportingObservations: approvedVid.supportingObservations,
                         contentDescription: approvedVid.contentDescription,
@@ -1152,15 +1181,16 @@ export class JobWorker {
                       Math.max(15, neededNewPhotos),
                       abortController.signal
                     );
+                    if (isCancelled()) return;
                     for (const ph of photos) {
                       const normPhoto = normalizeUrl(ph.mediaUrl);
                       if (seenPhotoMediaUrls.has(normPhoto)) continue;
                       seenPhotoMediaUrls.add(normPhoto);
                       amazonPhotos.push({
                         ...ph,
-                        matchCategory: 'exact_design',
+                        matchCategory: verdict.matchCategory,
                         matchScore: verdict.matchScore,
-                        userFacingMatchLabel: 'نفس المنتج (تطابق 100%)',
+                        userFacingMatchLabel: verdict.userFacingLabelAr,
                         supportingObservations: [
                           verdict.reasonAr,
                           `المنتج المطابق: ${amzPage.title.slice(0, 90)}`,
@@ -1193,7 +1223,7 @@ export class JobWorker {
           if (rejectedProductsCount > 0 || approvedProductsCount > 0) {
             updateState(
               'searching',
-              `تم فحص منتجات وفيديوهات أمازون بدقة 100%: اعتماد ${approvedProductsCount} منتج متطابق واستبعاد ${rejectedProductsCount} منتج مختلف أو سلبي.`,
+              `اكتمل فحص الدفعة: اعتماد ${approvedProductsCount} منتج واستبعاد ${rejectedProductsCount} منتج مختلف أو غير مؤكّد.`,
               'info'
             );
           }
@@ -1213,9 +1243,9 @@ export class JobWorker {
               platform: 'amazon',
               mediaType: 'video',
               provenance: v.provenance,
-              matchCategory: 'exact_design',
+              matchCategory: v.matchCategory,
               matchScore: v.matchScore,
-              userFacingMatchLabel: 'نفس المنتج (تطابق 100%)',
+              userFacingMatchLabel: v.userFacingMatchLabel,
               sentiment: 'positive',
               supportingObservations: v.supportingObservations,
               contentDescription: v.contentDescription,
@@ -1232,9 +1262,9 @@ export class JobWorker {
               mediaType: 'photo',
               provenance: p.provenance,
               verifiedPurchaseEvidence: p.verifiedPurchaseEvidence,
-              matchCategory: 'exact_design',
+              matchCategory: p.matchCategory,
               matchScore: p.matchScore,
-              userFacingMatchLabel: 'نفس المنتج (تطابق 100%)',
+              userFacingMatchLabel: p.userFacingMatchLabel,
               sentiment: 'positive',
               supportingObservations: p.supportingObservations,
               contentDescription:
@@ -1295,7 +1325,8 @@ export class JobWorker {
       if (isCancelled()) return;
 
       // 2D. Concurrent extraction from any additional non-Amazon web sources (max 3 total, max 2 per host)
-      if (webSourcesToExtract.length > 0) {
+      // This fallback has no visual identity verifier: never use it to bypass the image gate.
+      if (!refBase64 && webSourcesToExtract.length > 0 && project.settings.contentSources !== 'customer_only') {
         await runWithHostBoundedConcurrency(
           webSourcesToExtract,
           (src) => src.url,
@@ -1408,7 +1439,7 @@ export class JobWorker {
       if (isCancelled()) return;
 
       // Merge existing candidates (preserving manual links!) with newly discovered ones
-      const existingCandidates = project.candidates || [];
+      const existingCandidates = (project.candidates || []).filter(c => c.projectId === project.id && c.searchInputFingerprint === searchFingerprint);
       const combinedCandidates = [...existingCandidates, ...discoveredCandidates];
       project.counters.candidatesDiscovered = combinedCandidates.length;
 
@@ -1450,7 +1481,7 @@ export class JobWorker {
           continue;
         }
 
-        const category = candidate.matchCategory || 'exact_design';
+        const category = candidate.matchCategory || 'insufficient_evidence';
         if (category === 'mismatched') {
           continue;
         }
@@ -1469,6 +1500,7 @@ export class JobWorker {
           );
 
         const asset: CandidateAsset = {
+          searchInputFingerprint: searchFingerprint,
           id: assetId,
           projectId: project.id,
           title: candidate.title || 'مراجعة إيجابية للمنتج',
@@ -1486,13 +1518,13 @@ export class JobWorker {
           verifiedPurchaseEvidence: candidate.verifiedPurchaseEvidence,
           incentiveDisclosure: candidate.incentiveDisclosure,
           matchCategory: category,
-          matchScore: candidate.matchScore || 92,
-          userFacingMatchLabel: candidate.userFacingMatchLabel || 'نفس المنتج (تطابق 100%)',
+          matchScore: candidate.matchScore ?? 0,
+          userFacingMatchLabel: candidate.userFacingMatchLabel || 'المطابقة تحتاج مراجعة',
           visibleDifferences: candidate.visibleDifferences || [],
           supportingObservations: candidate.supportingObservations || [],
           unknowns: candidate.unknowns || [],
           contentDescription: candidate.contentDescription || 'عرض وتقييم إيجابي للمنتج',
-          sentiment: 'positive',
+          sentiment: candidate.sentiment || 'neutral',
           durationSeconds: candidate.durationSeconds,
           dimensions: candidate.dimensions,
           hasAudio: candidate.hasAudio,

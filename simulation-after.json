@@ -1,0 +1,22 @@
+{
+  "garmentSearchQueries": [
+    "Double Rail Clothes Garment Rack with Wheels",
+    "Double Rail Clothes Garment Rack",
+    "Double Rail Clothes Garment"
+  ],
+  "shoeAcceptedForGarment": {
+    "approved": false,
+    "matchCategory": "mismatched",
+    "matchScore": 0,
+    "userFacingLabelAr": "منتج مختلف (مستبعد)",
+    "reasonAr": "استخدام المنتج مختلف عن المطلوب، حتى مع تشابه الرفوف أو الإطار"
+  },
+  "sixTierAcceptedForNine": {
+    "approved": false,
+    "matchCategory": "mismatched",
+    "matchScore": 45,
+    "userFacingLabelAr": "منتج مختلف (مستبعد)",
+    "reasonAr": "تم الاستبعاد: اختلاف كبير في الحجم (6 دور بدلاً من 9 دور)"
+  },
+  "staleProfileOverridesNewName": "garment clothes rack"
+}

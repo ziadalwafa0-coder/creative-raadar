@@ -1,0 +1,24 @@
+{
+  "garmentSearchQueries": [
+    "Shoe Rack Organizer with Dustproof Cover",
+    "Portable Closet Shoe Storage Cabinet",
+    "Double Rail Clothes Garment Rack with Wheels",
+    "Double Rail Clothes Garment Rack",
+    "Double Rail Clothes Garment"
+  ],
+  "shoeAcceptedForGarment": {
+    "approved": false,
+    "matchCategory": "mismatched",
+    "matchScore": 20,
+    "userFacingLabelAr": "منتج مختلف (مستبعد)",
+    "reasonAr": "تم الاستبعاد: المنتج لا يطابق نوع المنتج المطلوب (double rail clothes garment wheels)"
+  },
+  "sixTierAcceptedForNine": {
+    "approved": true,
+    "matchCategory": "permitted_variation",
+    "matchScore": 88,
+    "userFacingLabelAr": "نفس تصميم المنتج",
+    "reasonAr": "نفس تصميم وهيكل المنتج المرفوع (6 دور)"
+  },
+  "staleProfileOverridesNewName": "9 Tier Shoe Rack with Dustproof Cover"
+}

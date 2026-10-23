@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import dotenv from 'dotenv';
 import { VisualAttribute, SearchSettings, MatchCategory } from '../types/index.ts';
 import {
   executeWithGeminiRetry,
@@ -9,10 +10,13 @@ import {
 } from './geminiRetry.ts';
 
 // Shared server-side Gemini client
+// Load secrets before constructing the SDK client (static imports run before server.ts).
+dotenv.config({path: '.env.local', quiet: true});
+dotenv.config({quiet: true});
 const apiKey = process.env.GEMINI_API_KEY || '';
 
 export const ai = new GoogleGenAI({
-  apiKey,
+  apiKey: apiKey || 'not-configured',
   httpOptions: {
     headers: {
       'User-Agent': 'aistudio-build',
@@ -368,7 +372,7 @@ TARGET PRODUCT SPECIFICATIONS:
         approved: isApproved,
         matchCategory: category,
         matchScore: score,
-        userFacingLabelAr: isApproved ? 'نفس المنتج (تطابق 100%)' : 'منتج مختلف (مستبعد)',
+        userFacingLabelAr: isApproved ? 'تطابق بصري مرجّح مع الصورة' : 'منتج مختلف (مستبعد)',
         reasonAr: String(
           d.reasonAr ||
             (isApproved
@@ -504,7 +508,7 @@ STRICT VIDEO APPROVAL RULES:
       const normalizedScore = rawScore <= 10 ? rawScore * 10 : rawScore;
       const isApproved =
         Boolean(d.approved) &&
-        (d.sentiment === 'positive' || (d.sentiment !== 'negative' && normalizedScore >= 80)) &&
+        d.sentiment === 'positive' &&
         normalizedScore >= 70;
       map.set(idx, {
         index: idx,

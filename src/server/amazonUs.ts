@@ -221,6 +221,13 @@ export async function buildAmazonUsQuery(
   enQueries?: string[],
   signal?: AbortSignal
 ): Promise<string> {
+  const subjectConflict = (name?: string) => {
+    const requested = productSubject(rawName);
+    const suggested = productSubject(name || '');
+    return requested && suggested && requested !== suggested;
+  };
+  if (subjectConflict(suggestedNameEn)) suggestedNameEn = undefined;
+  enQueries = enQueries?.filter(q => !subjectConflict(q));
   // 1. If Gemini provided a valid English name (containing ASCII letters and no Arabic script), prefer it
   const hasArabic = (s?: string) => Boolean(s && /[\u0600-\u06FF]/.test(s));
   const hasLatin = (s?: string) => Boolean(s && /[a-zA-Z]{3,}/.test(s));
@@ -421,15 +428,20 @@ export function evaluateStrictProductTitleMatch(
   const cleanRaw = (rawUserProductName || '').toLowerCase().trim();
   const combinedMustMatch = mustMatchAttributes.join(' ').toLowerCase();
   const fullContext = `${cleanExpected} ${cleanRaw} ${combinedMustMatch}`;
+  const targetSubject = productSubject(`${cleanRaw} ${cleanExpected}`);
+  const candidateSubject = productSubject(cleanTitle);
+  if (targetSubject && candidateSubject && targetSubject !== candidateSubject) {
+    return {approved:false, matchCategory:'mismatched', matchScore:0, userFacingLabelAr:'منتج مختلف (مستبعد)', reasonAr:'استخدام المنتج مختلف عن المطلوب، حتى مع تشابه الرفوف أو الإطار'};
+  }
 
-  // If title is just a fallback placeholder like "shoe rack (B0...)", allow it to be inspected on its product page
+  // Missing/fabricated search titles are not product identity evidence.
   if (!cleanTitle || /\([a-z0-9]{10}\)$/i.test(cleanTitle)) {
     return {
-      approved: true,
-      matchCategory: 'exact_design',
-      matchScore: 80,
-      userFacingLabelAr: 'نفس التصميم',
-      reasonAr: 'سيتم التحقق من تفاصيل صفحة المنتج',
+      approved: false,
+      matchCategory: 'mismatched',
+      matchScore: 0,
+      userFacingLabelAr: 'بيانات غير كافية',
+      reasonAr: 'العنوان المفقود أو المصطنع ليس دليلاً على تطابق المنتج',
     };
   }
 
@@ -582,7 +594,7 @@ export function evaluateStrictProductTitleMatch(
   if (targetTierMatch && candidateTierMatch) {
     const targetTiers = parseInt(targetTierMatch[1], 10);
     const candTiers = parseInt(candidateTierMatch[1], 10);
-    if (Math.abs(targetTiers - candTiers) > 3) {
+    if (targetTiers !== candTiers) {
       return {
         approved: false,
         matchCategory: 'mismatched',
@@ -600,13 +612,6 @@ export function evaluateStrictProductTitleMatch(
         reasonAr: `تطابق تام مع المنتج المرفوع (${candTiers} دور${requiresCover ? ' بغطاء' : ''})`,
       };
     }
-    return {
-      approved: true,
-      matchCategory: 'permitted_variation',
-      matchScore: 88,
-      userFacingLabelAr: 'نفس تصميم المنتج',
-      reasonAr: `نفس تصميم وهيكل المنتج المرفوع (${candTiers} دور)`,
-    };
   }
 
   return {
@@ -654,6 +659,28 @@ export async function fetchProductImageAsBase64(
  * Searches Amazon US (https://www.amazon.com/s?k=...) across multiple pages and query variants,
  * rotating resilient bot and browser headers to prevent 503/captcha blocks.
  */
+export function productSubject(text: string): string | undefined {
+  if (/shoe|جزام|جزامة|جزم/i.test(text)) return 'shoe';
+  if (/garment|clothes|clothing|ملابس/i.test(text)) return 'garment';
+  if (/spice|توابل/i.test(text)) return 'spice';
+  if (/washing|washer|غسال/i.test(text)) return 'washer';
+  if (/shelving|shelf|shelves|رفوف|رف مطبخ/i.test(text)) return 'shelving';
+  return undefined;
+}
+
+export function buildAmazonUsSearchVariants(query: string): string[] {
+  const clean = query.replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  const variants = [clean];
+  // Generic words like rack/tier/machine/anti must NEVER choose another product niche.
+  if (/\bshoe\b/i.test(clean)) {
+    if (/cover|covered|dustproof|zipper/i.test(clean)) variants.push('Shoe Rack Organizer with Dustproof Cover');
+  } else if (/\b(?:washing|washer)\b/i.test(clean) && /\b(?:vibration|pads?)\b/i.test(clean)) {
+    variants.push('Anti Vibration Washing Machine Pads');
+  }
+  return [...new Set(variants)];
+}
+
 export async function searchAmazonUsProductPages(
   query: string,
   maxProducts = 25,
@@ -687,6 +714,7 @@ export async function searchAmazonUsProductPages(
     }
   };
 
+  for (const variant of buildAmazonUsSearchVariants(cleanQuery)) addVariant(variant);
   // Add high-yield domain-specific query variants if applicable
   if (
     /\b(?:cervical\s+traction|neck\s+and\s+shoulder\s+relaxer|restcloud|neck\s+stretcher|neck\s+relaxer)\b/i.test(cleanQuery) &&
@@ -699,10 +727,10 @@ export async function searchAmazonUsProductPages(
   } else if (/\b(?:shiatsu|kneading|massager)\b/i.test(cleanQuery) && /\b(?:pillow|neck|back)\b/i.test(cleanQuery)) {
     addVariant('Shiatsu Neck and Back Massager Pillow with Heat');
     addVariant('Electric Kneading Massage Pillow for Neck Back');
-  } else if (/\b(?:shoe|rack|tier|closet)\b/i.test(cleanQuery)) {
+  } else if (/\bshoe\b/i.test(cleanQuery)) {
     addVariant('Shoe Rack Organizer with Dustproof Cover');
     addVariant('Portable Closet Shoe Storage Cabinet');
-  } else if (/\b(?:washing|machine|anti|vibration|pads?)\b/i.test(cleanQuery)) {
+  } else if (/\b(?:washing|washer)\b/i.test(cleanQuery) && /\b(?:vibration|pads?)\b/i.test(cleanQuery)) {
     addVariant('Anti Vibration Washing Machine Pads');
   }
 

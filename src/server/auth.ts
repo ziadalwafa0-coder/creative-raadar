@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Request } from 'express';
 
-const DATA_DIR = path.resolve(process.cwd(), '.data');
+const DATA_DIR = path.resolve(process.env.CREATIVE_RADAAR_DATA_DIR || path.join(process.cwd(), '.data'));
 const SESSIONS_FILE = path.join(DATA_DIR, 'auth_sessions.json');
 
 const SERVER_PEPPER_SALT =

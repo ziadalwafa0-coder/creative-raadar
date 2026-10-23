@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Language, translations } from '../translations/index.ts';
 import { Project, CandidateAsset, ProviderCapability, WorkspaceUsage } from '../types/index.ts';
+import { RequestScope } from '../utils/requestScope.ts';
 
 export type NavTab = 'search' | 'projects' | 'library' | 'integrations' | 'usage' | 'settings';
 
@@ -16,6 +17,8 @@ interface AppContextType {
   setActiveTab: (tab: NavTab) => void;
   currentProject: Project | null;
   setCurrentProject: (proj: Project | null) => void;
+  getSelectionEpoch: () => number;
+  commitProject: (proj: Project, epoch: number) => boolean;
   projects: Project[];
   refreshProjects: () => Promise<void>;
   library: CandidateAsset[];
@@ -63,6 +66,7 @@ function isTerminalJobState(state?: Project['jobState']): boolean {
     state === 'completed_partial' ||
     state === 'failed' ||
     state === 'cancelled' ||
+    state === 'needs_configuration' ||
     state === 'idle'
   );
 }
@@ -77,7 +81,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [lang, setLangState] = useState<Language>('ar');
   const [activeTab, setActiveTab] = useState<NavTab>('search');
-  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [currentProject, setCurrentProjectState] = useState<Project | null>(null);
+  const selectionScope = useRef(new RequestScope());
+  const selectedProjectRef = useRef<Project | null>(null);
+  const projectsRequest = useRef(0);
+  const getSelectionEpoch = () => selectionScope.current.current();
+  const setCurrentProject = (project: Project | null) => {
+    selectionScope.current.invalidate();
+    selectedProjectRef.current = project;
+    setCurrentProjectState(project);
+  };
+  const commitProject = (project: Project, epoch: number) => {
+    if (!selectionScope.current.accepts(epoch)) return false;
+    selectedProjectRef.current = project;
+    setCurrentProjectState(project);
+    return true;
+  };
   const [projects, setProjects] = useState<Project[]>([]);
   const [library, setLibrary] = useState<CandidateAsset[]>([]);
   const [providers, setProviders] = useState<ProviderCapability[]>([]);
@@ -97,7 +116,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers,
       credentials: 'same-origin',
     });
-    if (res.status === 401) {
+    if (res.status === 401 && token === authTokenRef.current) {
       const urlStr = typeof input === 'string' ? input : input.toString();
       if (!urlStr.includes('/api/auth/login') && !urlStr.includes('/api/auth/session')) {
         setStoredAuthToken(null);
@@ -221,15 +240,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const refreshProjects = async () => {
+    const epoch = getSelectionEpoch();
+    const request = ++projectsRequest.current;
     try {
       const res = await apiFetch('/api/projects');
       if (res.ok) {
         const data = await res.json();
         const list: Project[] = data.projects || [];
+        if (request !== projectsRequest.current || !selectionScope.current.accepts(epoch)) return;
         setProjects(list);
-        setCurrentProject((prev) =>
-          prev ? list.find((p) => p.id === prev.id) || prev : null
-        );
+        const selected = selectedProjectRef.current;
+        if (selected) {
+          const updated = list.find((p) => p.id === selected.id);
+          if (updated) commitProject(updated, epoch);
+        }
       }
     } catch (err) {
       console.warn('[Fetch Projects Failed]', err);
@@ -305,6 +329,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isAuthenticated || !currentProject?.id) return;
 
     const projectId = currentProject.id;
+    const epoch = getSelectionEpoch();
     let eventSource: EventSource | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
@@ -312,8 +337,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const MAX_POLLS = 80; // Bounded fallback (~2 minutes max at 1.5s interval)
 
     const syncProjectState = (updated: Project) => {
-      if (cancelled) return;
-      setCurrentProject(updated);
+      if (cancelled || updated.id !== projectId || selectedProjectRef.current?.id !== projectId) return;
+      if (!commitProject(updated, epoch)) return;
       setProjects((prev) => {
         const exists = prev.some((p) => p.id === updated.id);
         if (!exists) return [updated, ...prev];
@@ -413,6 +438,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab,
         currentProject,
         setCurrentProject,
+        getSelectionEpoch,
+        commitProject,
         projects,
         refreshProjects,
         library,

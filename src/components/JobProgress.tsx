@@ -19,7 +19,7 @@ interface Props {
 }
 
 export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => {
-  const { t, showToast, setCurrentProject, refreshProjects, apiFetch } = useApp();
+  const { t, showToast, commitProject, getSelectionEpoch, refreshProjects, apiFetch } = useApp();
   const [showDetails, setShowDetails] = useState(false);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [videoTargetInput, setVideoTargetInput] = useState<string>(
@@ -42,22 +42,24 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
     project.jobState === 'downloading' ||
     project.jobState === 'verifying';
 
-  const syncProjectNow = async () => {
+  const syncProjectNow = async (epoch: number) => {
     try {
       const res = await apiFetch(`/api/projects/${project.id}`);
       if (res.ok) {
         const updated = await res.json();
-        setCurrentProject(updated);
+        commitProject(updated, epoch);
       }
     } catch {}
     await refreshProjects();
   };
 
   const handleCancel = async () => {
+    const epoch = getSelectionEpoch();
     setIsActionLoading(true);
     try {
       await apiFetch(`/api/projects/${project.id}/cancel`, { method: 'POST' });
-      await syncProjectNow();
+      await syncProjectNow(epoch);
+      if (getSelectionEpoch() !== epoch) return;
       showToast('تم إيقاف البحث', 'info');
     } catch {
       showToast('فشل إيقاف البحث', 'error');
@@ -67,6 +69,7 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
   };
 
   const handleRerun = async () => {
+    const epoch = getSelectionEpoch();
     setIsActionLoading(true);
     const parsedVid = Math.min(500, Math.max(1, parseInt(videoTargetInput, 10) || project.targetVideoCount || 10));
     const parsedPh = Math.min(500, Math.max(1, parseInt(photoTargetInput, 10) || project.targetPhotoCount || 10));
@@ -74,7 +77,7 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
     setPhotoTargetInput(String(parsedPh));
 
     try {
-      await apiFetch(`/api/projects/${project.id}/search`, {
+      const response = await apiFetch(`/api/projects/${project.id}/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -82,8 +85,10 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
           targetPhotoCount: parsedPh,
         }),
       });
+      if (!response.ok) throw new Error('Search rejected');
+      await syncProjectNow(epoch);
+      if (getSelectionEpoch() !== epoch) return;
       showToast('تمت إعادة تشغيل البحث', 'success');
-      await syncProjectNow();
     } catch {
       showToast('فشل إعادة تشغيل البحث', 'error');
     } finally {

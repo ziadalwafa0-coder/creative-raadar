@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { isSafeExternalUrl } from '../utils/security.ts';
 import { DownloadStatus } from '../types/index.ts';
 
-const DOWNLOADS_DIR = path.resolve(process.cwd(), '.data', 'downloads');
+const DOWNLOADS_DIR = path.join(path.resolve(process.env.CREATIVE_RADAAR_DATA_DIR || path.join(process.cwd(), '.data')), 'downloads');
 const CACHE_INDEX_FILE = path.join(DOWNLOADS_DIR, 'verified_media_cache.json');
 
 let cachedFfmpegAvailable: boolean | null = null;
