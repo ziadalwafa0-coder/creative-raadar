@@ -1,0 +1,24 @@
+[
+  {
+    "urlKey": "video:https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/976973e6-a72c-485d-a14e-710478b5af1a/default.jobtemplate.hls.m3u8",
+    "mediaType": "video",
+    "localFilePath": "/app/applet/.data/downloads/ast-proj-1792664584940-k77ga-mvje7ieo_verified.mp4",
+    "sha256": "b0107bc81c456f5f767ec851d8bf0983aa2f44b918e23096857b7cf98cb8b512",
+    "fileSizeBytes": 13405025,
+    "durationSeconds": 31,
+    "width": 1920,
+    "height": 1080,
+    "verifiedAt": 1792664586003
+  },
+  {
+    "urlKey": "video:https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/3e6390b0-0e84-4eea-9aa2-ff2ba295c69d/default.vertical.jobtemplate.hls.m3u8",
+    "mediaType": "video",
+    "localFilePath": "/app/applet/.data/downloads/test-amz-cust-vid_verified.mp4",
+    "sha256": "7c75f88c3ca61b299875e656f622104d58e69d8b077dc6f5c8c4ca6a8dfb907e",
+    "fileSizeBytes": 3526137,
+    "durationSeconds": 6,
+    "width": 1080,
+    "height": 1920,
+    "verifiedAt": 1792667000088
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "name": "Creative Radaar",
+  "description": "Creative Radaar — منصة تجميع وتنزيل فيديوهات وصور المنتجات الحقيقية مع روابط المصادر",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
