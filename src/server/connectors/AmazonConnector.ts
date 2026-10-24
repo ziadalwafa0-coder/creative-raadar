@@ -39,7 +39,7 @@ export class AmazonConnector implements IConnector {
   }
 
   extractAsin(url: string): string | null {
-    const match = url.match(/(?:\/dp\/|\/gp\/product\/|\/product-reviews\/|\/ASIN\/)([A-Z0-9]{10})/i);
+    const match = url.match(/(?:\/dp\/|\/gp\/product\/|\/ASIN\/)([A-Z0-9]{10})/i);
     return match ? match[1].toUpperCase() : null;
   }
 

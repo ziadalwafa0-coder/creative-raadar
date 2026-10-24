@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { bindFileDragOverlay } from './utils/fileDragOverlay.ts';
+import { CustomerReviewsApp } from '../frontend/CustomerReviewsApp';
 import { AppProvider, useApp } from './context/AppContext.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { LoginView } from './components/LoginView.tsx';
@@ -160,6 +161,7 @@ const MainContent: React.FC = () => {
 };
 
 export default function App() {
+  if (import.meta.env.VITE_REVIEWS_API_URL) return <ErrorBoundary><CustomerReviewsApp api={import.meta.env.VITE_REVIEWS_API_URL.replace(/\/$/,'')} /></ErrorBoundary>;
   return (
     <ErrorBoundary>
       <AppProvider>
