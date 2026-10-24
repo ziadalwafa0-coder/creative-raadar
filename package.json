@@ -8,7 +8,9 @@
     "start": "tsx server.ts",
     "start:local": "npm --prefix backend start",
     "dev:frontend": "vite --host 127.0.0.1",
-    "build": "vite build",
+    "build": "npm run build:extension && vite build",
+    "build:extension": "node scripts/package-extension.mjs",
+    "test:browser": "tsx --test frontend/browserCollector.test.ts",
     "preview": "vite preview",
     "test": "tsx --test src/**/*.test.ts",
     "test:isolation": "tsx --test src/server/productIsolation.test.ts src/utils/rules.test.ts",
@@ -40,6 +42,7 @@
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.2",
+    "linkedom": "^0.18.14",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"

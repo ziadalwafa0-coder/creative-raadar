@@ -28,3 +28,7 @@ View your app in AI Studio: https://ai.studio/apps/ff65a0a5-87b8-4e89-8a97-bf115
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+# Free browser collection
+
+The optional Chrome/Edge companion reads public Amazon search/product pages using each user's connection, without a paid API or Amazon session. Installation and scope: [extension/README.ar.md](extension/README.ar.md). Build the downloadable ZIP with `npm run build:extension`; `npm run build` includes it automatically. The frontend defaults to this mode and explicitly explains when the extension is missing. Up to 50 distinct customer-proven videos across up to 20 matched products; availability is not guaranteed. Results remain in React memory and clear on new input/search/refresh. Authentication and media delivery still use the existing backend.
+

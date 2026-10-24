@@ -1,9 +1,9 @@
 name: Customer reviews pipeline
 on:
   push:
-    paths: ['backend/**', 'frontend/**', 'src/App.tsx', 'package*.json', '.github/workflows/customer-reviews.yml']
+    paths: ['backend/**', 'frontend/**', 'extension/**', 'scripts/**', 'public/**', 'src/App.tsx', 'package*.json', '.github/workflows/customer-reviews.yml']
   pull_request:
-    paths: ['backend/**', 'frontend/**', 'src/App.tsx', 'package*.json', '.github/workflows/customer-reviews.yml']
+    paths: ['backend/**', 'frontend/**', 'extension/**', 'scripts/**', 'public/**', 'src/App.tsx', 'package*.json', '.github/workflows/customer-reviews.yml']
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -20,6 +20,7 @@ jobs:
       - run: npm --prefix backend ci
       - run: npm --prefix backend run check
       - run: npm --prefix backend test
+      - run: npm run test:browser
       - run: npm run lint
       - run: npm run build
         env:

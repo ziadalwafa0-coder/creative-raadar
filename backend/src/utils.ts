@@ -1,4 +1,3 @@
-import {isIP} from 'node:net';
 import type {ReviewVideo} from './types.ts';
 export function parseRatingsCount(value:unknown):number {
  if(typeof value==='number')return Number.isFinite(value)?Math.max(0,Math.floor(value)):0;
@@ -10,7 +9,8 @@ export function parseRatingsCount(value:unknown):number {
 }
 const mediaHosts=new Set(['m.media-amazon.com','images-na.ssl-images-amazon.com','images-eu.ssl-images-amazon.com','images-fe.ssl-images-amazon.com']);
 export function safeMediaUrl(value:string):boolean {
- try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!isIP(u.hostname)&&mediaHosts.has(u.hostname);}catch{return false;}
+ // Exact host membership also rejects every IP literal; keep this shared parser browser-compatible.
+ try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&mediaHosts.has(u.hostname);}catch{return false;}
 }
 export function dedupeVideos(videos:ReviewVideo[]) {const seen=new Set<string>();return videos.filter(v=>{if(seen.has(v.url))return false;seen.add(v.url);return true;});}
 export const decodeHtml=(v:string)=>v.replace(/&quot;/g,'"').replace(/&#39;|&#x27;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');

@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {ZipArchive} from 'archiver';
+const root=path.resolve(import.meta.dirname,'..');
+const output=fs.createWriteStream(path.join(root,'public/creative-radaar-extension.zip'));
+const archive=new ZipArchive({zlib:{level:9}});
+const finished=new Promise((resolve,reject)=>{output.on('close',resolve);output.on('error',reject);archive.on('error',reject);});
+archive.pipe(output);
+for(const file of ['manifest.json','worker.js','bridge.js','README.ar.md'])archive.file(path.join(root,'extension',file),{name:file});
+await archive.finalize();await finished;
+console.log('Built free browser collector ZIP');

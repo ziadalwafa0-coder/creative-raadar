@@ -48,3 +48,11 @@ Static runtime search for the prohibited review-list path and explicit Amazon si
 | Docker / Railway deployment | Actual Docker build and public health/media tests passed on Railway Free |
 | Cloud customer-video discovery | Blocked by Amazon from the hosting IP; live run returned zero with an explicit warning |
 | Public Vercel frontend switched to new backend | Staged build READY and wired correctly; main-domain promotion pending provider setup and a successful cloud search |
+# Free browser collector verification — 2026-10-25
+
+- No Apify, Unwrangle, paid proxy, subscription, or trial-credit API enabled.
+- A real network smoke test ran the extension worker's request logic under Node from the user's connection, with credentials omitted and redirects rejected. Query `double rod clothes rack with wheels`: 20 matching product pages inspected, 21 distinct customer-proven videos returned, first five at 4.072 seconds; final result around 43 seconds. This is a real network test, **not** an installed Chrome extension E2E test and **not** proof that every query yields 40–50 videos.
+- Five new controlled browser-collector tests pass: ratings ordering/error pages, customer-only exact-ASIN filtering/50 cap, cancellation discarding late product data, stopping at a challenge, fixed operation/host restrictions and credential omission. Twelve backend tests also pass; TypeScript checks and production frontend build pass.
+- Each browser search is separate and has no stored results. The extension has no cookies/tabs/storage permissions. It never uploads Amazon page HTML to Railway. The existing API remains responsible for app login and media proxying.
+- Chrome UI verification: existing ZALS login against Railway succeeded, free browser mode and install links rendered. Search reported the extension missing (no ping response). The user reports installation; confirming which browser it was installed into is pending. No installed-extension E2E success or main-domain release is claimed. Browser automation policy blocks opening chrome://extensions; no alternate technique was used to bypass it.
+

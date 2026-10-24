@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Creative Radaar — Free Browser Collector",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "description": "Read public Amazon customer videos from your own connection. No API, Amazon login, cookies, or stored results.",
+  "host_permissions": ["https://www.amazon.com/*", "https://www.amazon.eg/*", "https://www.amazon.sa/*", "https://www.amazon.ae/*"],
+  "background": {"service_worker": "worker.js", "type": "module"},
+  "content_scripts": [{
+    "matches": ["https://creative-raadar.vercel.app/*", "http://127.0.0.1:5173/*", "http://localhost:5173/*"],
+    "js": ["bridge.js"],
+    "run_at": "document_start",
+    "all_frames": false
+  }]
+}
