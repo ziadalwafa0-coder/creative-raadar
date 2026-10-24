@@ -13,22 +13,26 @@ import { prepareSearchIdentity, productInputFingerprint } from './src/utils/prod
 import {
   verifyAccessCode,
   getRateLimitKey,
-  checkLoginRateLimit,
-  recordFailedLoginAttempt,
-  resetLoginAttempts,
+  checkSharedLoginLimit,
+  recordSharedLoginFailure,
+  resetSharedLoginFailures,
   issueAuthSession,
   verifyAuthSession,
   revokeAuthSession,
   extractAuthToken,
 } from './src/server/auth.ts';
 
-dotenv.config();
+dotenv.config({quiet:true});
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use('/api/auth', (_req,res,next) => {
+  res.setHeader('Cache-Control','private, no-store');
+  next();
+});
 
 // Ephemeral short-lived tickets for SSE / media preview (bound to authenticated ownerId + projectId)
 const ephemeralTickets = new Map<string, { ownerId: string; projectId: string; expiresAt: number }>();
@@ -63,9 +67,10 @@ const providerRegistry = ProviderRegistry.getInstance();
 // Public Authentication Endpoints (Rate-limited, Server-Side Code Verification)
 // -------------------------------------------------------------
 
-app.post('/api/auth/login', (req: Request, res: Response) => {
+app.post('/api/auth/login', async (req: Request, res: Response, next: NextFunction) => {
+ try {
   const rlKey = getRateLimitKey(req);
-  const rlCheck = checkLoginRateLimit(rlKey);
+  const rlCheck = await checkSharedLoginLimit(rlKey);
   if (!rlCheck.allowed) {
     res.setHeader('Retry-After', String(rlCheck.retryAfterSeconds || 60));
     return res.status(429).json({
@@ -77,13 +82,13 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
   const verification = verifyAccessCode(rawCode);
 
   if (!verification.valid || !verification.ownerId) {
-    recordFailedLoginAttempt(rlKey);
+    await recordSharedLoginFailure(rlKey);
     return res.status(401).json({
       error: 'كود الدخول غير صحيح',
     });
   }
 
-  resetLoginAttempts(rlKey);
+  await resetSharedLoginFailures(rlKey);
 
   // Support optional bounded TTL header for automated expiration tests (capped at 12h)
   const customTtlHeader = Number(req.headers['x-session-ttl-ms']);
@@ -92,12 +97,12 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       ? customTtlHeader
       : 12 * 60 * 60 * 1000;
 
-  const { token, expiresAt } = issueAuthSession(verification.ownerId, ttlMs);
+  const { token, expiresAt } = await issueAuthSession(verification.ownerId, ttlMs);
   const maxAgeSec = Math.max(1, Math.floor((expiresAt - Date.now()) / 1000));
 
   res.setHeader(
     'Set-Cookie',
-    `cr_auth_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`
+    `cr_auth_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${process.env.VERCEL ? '; Secure' : ''}`
   );
 
   return res.json({
@@ -105,11 +110,13 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     token,
     expiresAt,
   });
+ } catch(error) { next(error); }
 });
 
-app.get('/api/auth/session', (req: Request, res: Response) => {
+app.get('/api/auth/session', async (req: Request, res: Response, next: NextFunction) => {
+ try {
   const token = extractAuthToken(req);
-  const session = verifyAuthSession(token);
+  const session = await verifyAuthSession(token);
   if (!session.valid || !session.ownerId) {
     return res.status(401).json({
       authenticated: false,
@@ -120,27 +127,31 @@ app.get('/api/auth/session', (req: Request, res: Response) => {
     authenticated: true,
     expiresAt: session.expiresAt,
   });
+ } catch(error) {next(error);}
 });
 
-app.post('/api/auth/logout', (req: Request, res: Response) => {
+app.post('/api/auth/logout', async (req: Request, res: Response, next: NextFunction) => {
+ try {
   const token = extractAuthToken(req);
   if (token) {
-    revokeAuthSession(token);
+    await revokeAuthSession(token);
   }
   res.setHeader(
     'Set-Cookie',
-    'cr_auth_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0'
+    `cr_auth_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.VERCEL ? '; Secure' : ''}`
   );
   return res.json({ authenticated: false });
+ } catch(error) {next(error);}
 });
 
 // -------------------------------------------------------------
 // Strict Authentication Guard for all /api/* routes
 // Never accepts arbitrary X-Session-ID or ?sessionId= query parameters
 // -------------------------------------------------------------
-function requireAuth(req: Request, res: Response, next: NextFunction) {
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
+ try {
   const token = extractAuthToken(req);
-  const session = verifyAuthSession(token);
+  const session = await verifyAuthSession(token);
   if (session.valid && session.ownerId) {
     (req as any).sessionId = session.ownerId;
     return next();
@@ -160,7 +171,20 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   return res.status(401).json({
     error: 'يرجى تسجيل الدخول أولاً',
   });
+ } catch(error) {next(error);}
 }
+
+app.get('/api/health', (_req, res) => res.json({ok:true, api:true, projectStorageReady:!process.env.VERCEL}));
+
+// Until a durable cloud project store and job runner are configured, refuse cloud
+// mutations instead of pretending scratch-space files are persistent projects.
+app.use('/api/projects', (req,res,next) => {
+  if (process.env.VERCEL && req.method !== 'GET') return requireAuth(req,res,() => res.status(503).json({
+    code:'CLOUD_PROJECT_STORAGE_REQUIRED',
+    error:'تم إصلاح تسجيل الدخول. حفظ المشاريع وتشغيل البحث على السحابة يحتاجان استكمال إعداد التخزين الدائم أولاً.',
+  }));
+  next();
+});
 
 // -------------------------------------------------------------
 // Protected REST API Routes
@@ -558,6 +582,13 @@ async function startServer() {
   });
 }
 
-startServer().catch((err) => {
+app.use((error:unknown,_req:Request,res:Response,_next:NextFunction) => {
+  // Do not expose provider errors, tokens, or submitted access codes.
+  console.error('[API] Request failed', error instanceof Error ? error.name : 'UnknownError');
+  res.status(503).json({code:'SERVICE_UNAVAILABLE',error:'خدمة تسجيل الدخول أو التخزين غير متاحة مؤقتاً. حاول مرة أخرى.'});
+});
+
+export default app;
+if (!process.env.VERCEL) startServer().catch((err) => {
   console.error('Failed to start server:', err);
 });

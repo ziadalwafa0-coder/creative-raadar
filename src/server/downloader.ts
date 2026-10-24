@@ -4,8 +4,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { isSafeExternalUrl } from '../utils/security.ts';
 import { DownloadStatus } from '../types/index.ts';
+import { DATA_DIR } from './runtimePaths.ts';
 
-const DOWNLOADS_DIR = path.join(path.resolve(process.env.CREATIVE_RADAAR_DATA_DIR || path.join(process.cwd(), '.data')), 'downloads');
+const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads');
 const CACHE_INDEX_FILE = path.join(DOWNLOADS_DIR, 'verified_media_cache.json');
 
 let cachedFfmpegAvailable: boolean | null = null;

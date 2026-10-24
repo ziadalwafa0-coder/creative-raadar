@@ -24,4 +24,5 @@ jobs:
       - run: npm run build
       - run: npm run test:isolation
       - run: npm run test:isolation:api
+      - run: npm run test:cloud-auth
       - run: npx tsx --test src/server/workflow.test.ts

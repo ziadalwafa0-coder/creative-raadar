@@ -22,6 +22,7 @@ import { isSafeExternalUrl, computeSha256 } from '../utils/security.ts';
 import { isDuplicateCandidate, matchesStrictness, matchesMediaType, normalizeUrl } from '../utils/rules.ts';
 import { downloadMedia } from './downloader.ts';
 import { prepareSearchIdentity } from '../utils/productIdentity.ts';
+import { DATA_DIR } from './runtimePaths.ts';
 import {
   AMAZON_US_HEADERS,
   AMAZON_US_PRODUCT_PAGE_HEADERS,
@@ -36,7 +37,7 @@ import {
   ExtractedAmazonVideo
 } from './amazonUs.ts';
 
-const DOWNLOADS_DIR = path.join(path.resolve(process.env.CREATIVE_RADAAR_DATA_DIR || path.join(process.cwd(), '.data')), 'downloads');
+const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads');
 
 // In-memory extraction cache (15 minutes TTL) to avoid re-fetching identical product/review pages
 const EXTRACTION_CACHE_TTL_MS = 15 * 60 * 1000;

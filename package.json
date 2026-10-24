@@ -11,12 +11,14 @@
     "test": "tsx --test src/**/*.test.ts",
     "test:isolation": "tsx --test src/server/productIsolation.test.ts src/utils/rules.test.ts",
     "test:isolation:api": "tsx --test src/server/apiIsolation.test.ts",
+    "test:cloud-auth": "tsx --test src/server/cloudAuth.test.ts",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@vercel/blob": "2.8.2",
     "@vitejs/plugin-react": "^6.1.1",
     "archiver": "^8.0.0",
     "dotenv": "^17.2.3",

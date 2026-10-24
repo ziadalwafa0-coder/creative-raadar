@@ -2,8 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Request } from 'express';
+import { DATA_DIR } from './runtimePaths.ts';
+import { cloudAuthRecords, updateCloudCounter } from './cloudAuthRecords.ts';
 
-const DATA_DIR = path.resolve(process.env.CREATIVE_RADAAR_DATA_DIR || path.join(process.cwd(), '.data'));
 const SESSIONS_FILE = path.join(DATA_DIR, 'auth_sessions.json');
 
 const SERVER_PEPPER_SALT =
@@ -175,43 +176,51 @@ export function clearAllRateLimitsForTests(): void {
   rateLimitMap.clear();
 }
 
-export function issueAuthSession(
+export async function issueAuthSession(
   ownerId: string,
   ttlMs: number = DEFAULT_SESSION_TTL_MS
-): { token: string; expiresAt: number } {
+): Promise<{ token: string; expiresAt: number }> {
   const rawToken = `crs_${crypto.randomBytes(28).toString('hex')}`;
   const tokenHash = hashToken(rawToken);
   const now = Date.now();
   const expiresAt = now + ttlMs;
 
-  sessionsByTokenHash.set(tokenHash, {
+  const record = {
     tokenHash,
     ownerId,
     createdAt: now,
     expiresAt,
-  });
-  saveSessionsToDisk();
+  };
+  if (process.env.VERCEL) await cloudAuthRecords.write(`sessions/${tokenHash}`, record);
+  else {
+    sessionsByTokenHash.set(tokenHash, record);
+    saveSessionsToDisk();
+  }
 
   return { token: rawToken, expiresAt };
 }
 
-export function verifyAuthSession(rawToken: string | undefined): {
+export async function verifyAuthSession(rawToken: string | undefined): Promise<{
   valid: boolean;
   ownerId?: string;
   expiresAt?: number;
-} {
+}> {
   if (!rawToken || typeof rawToken !== 'string' || !rawToken.startsWith('crs_')) {
     return { valid: false };
   }
   const tokenHash = hashToken(rawToken);
-  const record = sessionsByTokenHash.get(tokenHash);
+  const record = process.env.VERCEL
+    ? (await cloudAuthRecords.read<AuthSessionRecord>(`sessions/${tokenHash}`))?.value
+    : sessionsByTokenHash.get(tokenHash);
   if (!record) {
     return { valid: false };
   }
   const now = Date.now();
   if (record.expiresAt <= now) {
-    sessionsByTokenHash.delete(tokenHash);
-    saveSessionsToDisk();
+    if (!process.env.VERCEL) {
+      sessionsByTokenHash.delete(tokenHash);
+      saveSessionsToDisk();
+    }
     return { valid: false };
   }
 
@@ -222,14 +231,40 @@ export function verifyAuthSession(rawToken: string | undefined): {
   };
 }
 
-export function revokeAuthSession(rawToken: string | undefined): boolean {
+export async function revokeAuthSession(rawToken: string | undefined): Promise<boolean> {
   if (!rawToken || typeof rawToken !== 'string') return false;
   const tokenHash = hashToken(rawToken);
+  if (process.env.VERCEL) {
+    await cloudAuthRecords.remove(`sessions/${tokenHash}`);
+    return true;
+  }
   const existed = sessionsByTokenHash.delete(tokenHash);
   if (existed) {
     saveSessionsToDisk();
   }
   return existed;
+}
+
+export async function checkSharedLoginLimit(key: string): Promise<{allowed:boolean;retryAfterSeconds?:number}> {
+  if (!process.env.VERCEL) return checkLoginRateLimit(key);
+  const record = await cloudAuthRecords.read<{count:number;resetAt:number}>(`limits/${hashToken(key)}`);
+  const value = record?.value;
+  if (value && value.resetAt > Date.now() && value.count >= MAX_FAILED_ATTEMPTS) {
+    return {allowed:false,retryAfterSeconds:Math.ceil((value.resetAt-Date.now())/1000)};
+  }
+  return {allowed:true};
+}
+
+export async function recordSharedLoginFailure(key:string):Promise<void> {
+  if (!process.env.VERCEL) { recordFailedLoginAttempt(key); return; }
+  await updateCloudCounter(`limits/${hashToken(key)}`, value => !value || value.resetAt <= Date.now()
+    ? {count:1,resetAt:Date.now()+RATE_LIMIT_WINDOW_MS}
+    : {...value,count:Math.min(value.count+1,MAX_FAILED_ATTEMPTS)});
+}
+
+export async function resetSharedLoginFailures(key:string):Promise<void> {
+  if (!process.env.VERCEL) {resetLoginAttempts(key); return;}
+  await cloudAuthRecords.remove(`limits/${hashToken(key)}`);
 }
 
 export function extractAuthToken(req: Request): string | undefined {

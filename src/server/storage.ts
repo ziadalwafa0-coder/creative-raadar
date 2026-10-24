@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Project, CandidateAsset, WorkspaceUsage } from '../types/index.ts';
 import { PRIMARY_USER_OWNER_ID } from './auth.ts';
+import { DATA_DIR } from './runtimePaths.ts';
 
-const DATA_DIR = path.resolve(process.env.CREATIVE_RADAAR_DATA_DIR || path.join(process.cwd(), '.data'));
 const DB_FILE = path.join(DATA_DIR, 'reviewscout_db.json');
 
 export interface DatabaseSchema {

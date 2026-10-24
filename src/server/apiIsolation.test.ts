@@ -10,7 +10,7 @@ test('HTTP simulation uses isolated synthetic projects and no external services'
   const dataDir=fs.mkdtempSync(path.join(os.tmpdir(),'radaar-http-'));
   process.env.CREATIVE_RADAAR_DATA_DIR=dataDir;
   const { issueAuthSession }=await import('./auth.ts');
-  const {token}=issueAuthSession('owner-http-simulation');
+  const {token}=await issueAuthSession('owner-http-simulation');
   const socket=net.createServer();await new Promise<void>(resolve=>socket.listen(0,'127.0.0.1',resolve));
   const port=(socket.address() as net.AddressInfo).port;
   await new Promise<void>(resolve=>socket.close(()=>resolve()));

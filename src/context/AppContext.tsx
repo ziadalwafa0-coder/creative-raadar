@@ -146,6 +146,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       const data = await res.json().catch(() => ({}));
+      if (res.status === 404 || !(res.headers.get('content-type') || '').includes('application/json')) {
+        return {ok:false,error:'خدمة تسجيل الدخول غير منشورة بشكل صحيح. المشكلة في الخادم وليست في الكود.'};
+      }
+      if (res.status >= 500) return {ok:false,error:data.error || 'خدمة تسجيل الدخول غير متاحة مؤقتاً. حاول مرة أخرى.'};
       if (!res.ok || !data.authenticated) {
         return {
           ok: false,
