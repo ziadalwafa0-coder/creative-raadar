@@ -25,4 +25,5 @@ jobs:
       - run: npm run test:isolation
       - run: npm run test:isolation:api
       - run: npm run test:cloud-auth
+      - run: npx tsx --test src/utils/fileDragOverlay.test.ts
       - run: npx tsx --test src/server/workflow.test.ts

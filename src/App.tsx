@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
+import { bindFileDragOverlay } from './utils/fileDragOverlay.ts';
 import { AppProvider, useApp } from './context/AppContext.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { LoginView } from './components/LoginView.tsx';
@@ -25,40 +26,15 @@ const MainContent: React.FC = () => {
 
   const [isWindowDragging, setIsWindowDragging] = useState(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
-  const dragCounter = useRef(0);
   useEffect(() => { setIsManualModalOpen(false); }, [currentProject?.id]);
 
   useEffect(() => {
+    setIsWindowDragging(false);
     if (!isAuthenticated) return;
-
-    const handleWindowDragEnter = (e: DragEvent) => {
-      e.preventDefault();
-      dragCounter.current += 1;
-      if (e.dataTransfer?.types?.includes('Files')) {
-        setIsWindowDragging(true);
-      }
-    };
-
-    const handleWindowDragOver = (e: DragEvent) => {
-      e.preventDefault();
-      if (e.dataTransfer) {
-        e.dataTransfer.dropEffect = 'copy';
-      }
-    };
-
-    const handleWindowDragLeave = (e: DragEvent) => {
-      e.preventDefault();
-      dragCounter.current -= 1;
-      if (dragCounter.current <= 0) {
-        dragCounter.current = 0;
-        setIsWindowDragging(false);
-      }
-    };
+    const unbindOverlay = bindFileDragOverlay(window, setIsWindowDragging);
 
     const handleWindowDrop = (e: DragEvent) => {
       e.preventDefault();
-      dragCounter.current = 0;
-      setIsWindowDragging(false);
 
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
@@ -89,16 +65,11 @@ const MainContent: React.FC = () => {
       }
     };
 
-    window.addEventListener('dragenter', handleWindowDragEnter);
-    window.addEventListener('dragover', handleWindowDragOver);
-    window.addEventListener('dragleave', handleWindowDragLeave);
     window.addEventListener('drop', handleWindowDrop);
     window.addEventListener('paste', handleWindowPaste);
 
     return () => {
-      window.removeEventListener('dragenter', handleWindowDragEnter);
-      window.removeEventListener('dragover', handleWindowDragOver);
-      window.removeEventListener('dragleave', handleWindowDragLeave);
+      unbindOverlay();
       window.removeEventListener('drop', handleWindowDrop);
       window.removeEventListener('paste', handleWindowPaste);
     };
