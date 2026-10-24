@@ -10,9 +10,10 @@ chromium.use(stealth());
 const userAgent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Safari/537.36';
 class Gate {
  private active=0;private waiting:Array<()=>void>=[];
+ private limit=Math.max(1,Math.min(2,Number(process.env.BROWSER_CONCURRENCY)||2));
  async enter(signal?:AbortSignal):Promise<()=>void>{
   signal?.throwIfAborted();
-  if(this.active<2)this.active++;
+  if(this.active<this.limit)this.active++;
   else await new Promise<void>((resolve,reject)=>{
    const resume=()=>{signal?.removeEventListener('abort',abort);resolve();};
    const abort=()=>{this.waiting=this.waiting.filter(v=>v!==resume);reject(signal?.reason||Error('aborted'));};

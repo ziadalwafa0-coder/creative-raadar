@@ -68,3 +68,15 @@ test('active source contains no review-list navigation or Amazon account login',
  const files=['../src/sources/public.ts','../src/sources/provider.ts','../src/index.ts'];
  for(const file of files){const content=fs.readFileSync(new URL(file,import.meta.url),'utf8');assert.doesNotMatch(content,/\/product-reviews\//);assert.doesNotMatch(content,/storageState\s*:|addCookies\s*\(|\/ap\/signin/);}
 });
+
+test('HTTP new search supersedes a delayed old search using the same session',async()=>{
+ let release!:()=>void;const delayed=new Promise<void>(resolve=>release=resolve);const auth=createAuth();
+ const source:VideoSource={name:'fixture',async search(query){return [hit(query==='old product'?'B000000001':'B000000002',1)];},async getCustomerVideos(asin){if(asin==='B000000001')await delayed;return [video(asin==='B000000001'?1:2,asin)];}};
+ const app=await buildApp({source,auth,cache:freshCache(),logging:false});await app.listen({host:'127.0.0.1',port:0});const token=auth.issue('session','test');const abort=new AbortController();const timer=setTimeout(()=>abort.abort(),10000);
+ const run=(query:string)=>fetch(app.listeningOrigin+'/api/search?'+new URLSearchParams({q:query,id:crypto.randomUUID()}),{headers:{Authorization:`Bearer ${token}`},signal:abort.signal});
+ try{
+  const old=await run('old product');const oldEvents:any[]=[];const oldReading=readNdjson(old.body!,abort.signal,event=>oldEvents.push(event));
+  const current=await run('new product');assert.equal(current.status,200);const events:any[]=[];await readNdjson(current.body!,abort.signal,event=>events.push(event));
+  release();await oldReading;assert.equal(events.find(event=>event.type==='video').video.sourceAsin,'B000000002');assert.equal(oldEvents.filter(event=>event.type==='video').length,0);
+ }finally{release();clearTimeout(timer);abort.abort();await app.close();}
+});
