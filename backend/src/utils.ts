@@ -16,6 +16,11 @@ export function dedupeVideos(videos:ReviewVideo[]) {const seen=new Set<string>()
 export const decodeHtml=(v:string)=>v.replace(/&quot;/g,'"').replace(/&#39;|&#x27;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
 export function videoType(url:string):'mp4'|'hls'|undefined {return /\.m3u8(?:[?#]|$)/i.test(url)?'hls':/\.mp4(?:[?#]|$)/i.test(url)?'mp4':undefined;}
 export function normalizeQuery(query:string){return query.normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase();}
+export function isAmazonErrorPage(title:string,body:string):boolean {
+ // Observed on Railway: Amazon returns its 500/503 image page with HTTP 200
+ // and an empty innerText. The title remains the authoritative failure signal.
+ return /^Sorry!\s*Something went wrong!?$/i.test(title.trim()) || /automated access/i.test(body);
+}
 export function signalSleep(ms:number,signal?:AbortSignal) {
  return new Promise<void>((resolve,reject)=>{signal?.throwIfAborted();const stop=()=>{clearTimeout(timer);reject(signal?.reason||Error('aborted'));};const timer=setTimeout(()=>{signal?.removeEventListener('abort',stop);resolve();},ms);signal?.addEventListener('abort',stop,{once:true});});
 }

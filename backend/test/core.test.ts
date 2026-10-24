@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseRatingsCount,dedupeVideos,safeMediaUrl} from '../src/utils.ts';
+import {parseRatingsCount,dedupeVideos,safeMediaUrl,isAmazonErrorPage} from '../src/utils.ts';
 import {publicAddress,rewriteManifest} from '../src/media.ts';
 import {parseCustomerVideoBlocks} from '../src/parser.ts';
 import {SourceError,type VideoSource,type ReviewVideo,type ProductHit} from '../src/types.ts';
@@ -16,6 +16,11 @@ const video=(i:number,asin='B000000002'):ReviewVideo=>({url:media(i),type:'mp4',
 const hit=(asin:string,count:number):ProductHit=>({asin,title:'Double rod clothes rack',ratingsCount:count,url:`https://www.amazon.com/dp/${asin}`});
 const freshCache=()=>new Cache({warn:()=>{}},'','');
 const collect=async(source:VideoSource,cache=freshCache())=>{const events=[];for await(const event of searchVideos('clothes rack','amazon.com','123',source,cache,new AbortController().signal))events.push(event);return events;};
+
+test('HTTP 200 Amazon error-image pages are blocked, not empty product searches',()=>{
+ assert.equal(isAmazonErrorPage('Sorry! Something went wrong!',''),true);
+ assert.equal(isAmazonErrorPage('Amazon.com: Clothes rack','A customer said sorry something went wrong during assembly'),false);
+});
 
 test('ratings support K, separators, Arabic-Indic and Persian digits',()=>{
  for(const [input,expected]of [['1.2K',1200],['12,345',12345],['١٢٬٣٤٥ تقييم',12345],['۱٫۲K',1200],['٢ ألف',2000],['0',0],['not a number',0]] as const)assert.equal(parseRatingsCount(input),expected);

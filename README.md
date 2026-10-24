@@ -6,7 +6,7 @@
 
 ## Customer review streaming backend
 
-The new public-page-only Fastify backend and Arabic React UI are documented in [backend/README.ar.md](backend/README.ar.md). Set `VITE_REVIEWS_API_URL` to activate the new frontend. Backend source, deployment files and cache schema are under `backend/`; no production backend URL has been configured yet.
+The new public-page-only Fastify backend and Arabic React UI are documented in [backend/README.ar.md](backend/README.ar.md). Set `VITE_REVIEWS_API_URL` to activate the new frontend. Backend source, deployment files and cache schema are under `backend/`. See [backend/VERIFICATION.md](backend/VERIFICATION.md) for the actual deployment status and test limits.
 
 ## Product isolation fix — 2026-10-24
 

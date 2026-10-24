@@ -4,7 +4,7 @@ import type {Browser,Page} from 'playwright';
 import {markets,SourceError,type Marketplace,type ProductHit,type VideoSource} from '../types.ts';
 import {amazonSelectors as selectors} from '../selectors.amazon.ts';
 import {parseCustomerVideoBlocks} from '../parser.ts';
-import {parseRatingsCount,signalSleep} from '../utils.ts';
+import {parseRatingsCount,signalSleep,isAmazonErrorPage} from '../utils.ts';
 
 chromium.use(stealth());
 const userAgent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Safari/537.36';
@@ -63,7 +63,7 @@ export class PublicPageSource implements VideoSource {
      if(status>=400)throw new SourceError('NETWORK',`تعذر قراءة المصدر (${status})`);
      const text=await page.locator('body').innerText({timeout:5000});
      if(/Robot Check|validateCaptcha|Enter the characters you see below|Type the characters|verify.*human/i.test(text))throw new SourceError('CAPTCHA','أمازون طلب تحققًا بشريًا؛ تم تخطي المنتج');
-     if(/automated access|sorry.*something went wrong/i.test(text))throw new SourceError('BLOCKED','أمازون حظرت الطلب مؤقتًا، جرّب بعد قليل');
+     if(isAmazonErrorPage(await page.title(),text))throw new SourceError('BLOCKED','أمازون حظرت الطلب مؤقتًا، جرّب بعد قليل');
      await page.locator(selectors.productTitle.join(',')+','+selectors.searchRows.join(',')).first().waitFor({state:'attached',timeout:5000}).catch(()=>{});
      const value=await read(page);signal?.throwIfAborted();return value;
     }catch(error){

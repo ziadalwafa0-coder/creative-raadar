@@ -10,11 +10,21 @@ The browser UI at http://127.0.0.1:5173 called the standalone backend on port 43
 - Clicking Download created `D:/Ziad/Downloads/Creative-Radaar-B0DQK9MPS2-1792841412146.mp4`. ffprobe verified H.264 480×854, AAC, duration 53.386667 seconds, size 31,438,071 bytes. The browser automation's download event timed out even though the actual file completed successfully.
 - Clicking Start Again removed all old cards immediately and showed `جاري فحص المنتج 1 من 10 — البحث محفوظ مؤقتًا`. A later cached run displayed nine videos within the first browser observation (under one second) and eventually completed with **12 distinct customer videos**. The intervening fresh inspections populated additional positive cache entries; the first uncached run's count was three.
 
-The latest live run reached the requested limit of 12. No count of 40 or 50 is claimed for this architecture. Screenshot: `../creative-radaar-customer-reviews.png` in the parent task folder, outside this checkout.
+The latest local live run reached the requested limit of 12. No count of 40 or 50 is claimed for this architecture. A screenshot is saved in the task workspace outside this checkout as `creative-radaar-customer-reviews.png`.
+
+## Cloud deployment checks
+
+- With the user's explicit approval, the existing Railway workspace was changed from expired Trial to Free. A separate `creative-raadar` service was added inside the existing `positive-intuition` project; the existing `web` / `stockradaar` service source was not changed or deleted.
+- Railway built the actual `backend/Dockerfile` successfully. Public backend: https://creative-raadar-production.up.railway.app. `/health` returned 200 with `source:public`, `cache:memory`, `persistentMedia:false`.
+- Existing code authentication succeeded against the public backend. A real MP4 Range request through the signed media proxy returned 206, `bytes 0-1023/31438071`, `video/mp4`, and the MP4 `ftyp` signature.
+- A real cloud search for the same clothes-rack query returned NDJSON with `BLOCKED` and `{done:true,count:0}`. A subsequent staged-browser run received Amazon's image-only error page titled `Sorry! Something went wrong!`, with zero ASIN rows and empty body text, despite HTTP 200. This is NOT an ordinary selector mismatch or a successful cloud video-discovery test. The prepared title-based detector classifies that page as BLOCKED rather than PARSE_EMPTY; this final detector patch awaits release. A configured external provider or country-matched proxy remains necessary.
+- The staged Vercel UI successfully logged into the actual Railway backend using an existing code and displayed the source failure warning. CORS was verified for this exact staging origin. No blank failure or cross-product results were substituted.
+- A production-target Vercel build is READY at https://creative-raadar-boyxxmhgb-ziad-aboalwafa.vercel.app. Its JavaScript contains the correct Railway backend URL and streaming client. The main custom domain has not been promoted to this build while cloud video discovery is blocked.
+- The user is signing into the external provider. No provider key, residential proxy, paid subscription or Supabase service key has been configured by this work yet.
 
 ## Automated verification
 
-11 backend tests passed, covering numeric parsing (Arabic/Persian/K), exact-URL dedupe, media SSRF allowlist, HLS URI rewriting, customer-only provenance including negative reviews, ordering/empty-product skip/12-video limit, positive and negative cache hits, explicit blocked warnings without caching failures, old-search cancellation, HTTP streaming before the next product finishes, and server-side cancellation when a second HTTP search supersedes a delayed first search.
+12 backend tests passed, covering numeric parsing (Arabic/Persian/K), exact-URL dedupe, media SSRF allowlist, HLS URI rewriting, customer-only provenance including negative reviews, ordering/empty-product skip/12-video limit, positive and negative cache hits, explicit blocked warnings without caching failures, old-search cancellation, HTTP streaming before the next product finishes, server-side cancellation when a second HTTP search supersedes a delayed first search, and Amazon error pages returned with HTTP 200.
 
 37 existing auth/isolation/drag tests passed. TypeScript checking and the root production build passed. These controlled tests use fixtures where appropriate; they do not establish live video availability for eleven products.
 
@@ -35,5 +45,6 @@ Static runtime search for the prohibited review-list path and explicit Amazon si
 | Residential proxies | Not configured or tested |
 | External provider | Adapter implemented; no provider credentials configured/tested |
 | Supabase persistence | Schema/adapter implemented; not configured or live-tested; memory cache used |
-| Docker / Railway / Fly deployment | Files prepared; Docker unavailable locally; not deployed |
-| Public Vercel frontend switched to new backend | Not done: no public HTTPS backend URL configured |
+| Docker / Railway deployment | Actual Docker build and public health/media tests passed on Railway Free |
+| Cloud customer-video discovery | Blocked by Amazon from the hosting IP; live run returned zero with an explicit warning |
+| Public Vercel frontend switched to new backend | Staged build READY and wired correctly; main-domain promotion pending provider setup and a successful cloud search |
