@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Creative Radaar — Free Browser Collector",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "minimum_chrome_version": "120",
   "description": "Read public Amazon customer videos from your own connection. No API, Amazon login, cookies, or stored results.",
   "host_permissions": ["https://www.amazon.com/*", "https://www.amazon.eg/*", "https://www.amazon.sa/*", "https://www.amazon.ae/*"],

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DOMParser} from 'linkedom';
-import {readAmazonDocument,readBrowserProducts,searchInBrowser} from './browserCollector';
+import {readAmazonDocument,readBrowserProducts,readCustomerImages,searchInBrowser} from './browserCollector';
 Object.assign(globalThis,{DOMParser});
 const asin='B000000001';const other='B000000002';
 const media=(i:number)=>`https://m.media-amazon.com/test-${i}.mp4`;
@@ -37,10 +37,34 @@ test('extension worker only permits fixed public Amazon operations and omits cre
  assert.throws(()=>requestUrl({operation:'search',market:'evil.test',query:'rack'}));
  assert.throws(()=>requestUrl({operation:'product',market:'amazon.com',asin:'../../ap/signin'}));
  assert.equal(requestUrl({operation:'product',market:'amazon.com',asin}),`https://www.amazon.com/dp/${asin}`);
+ assert(requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'2'}).endsWith('&page=2'));
+ assert.throws(()=>requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'99'}));
  const original=globalThis.fetch;globalThis.fetch=async(url:any,init:any)=>{called=String(url);options=init;return new Response('<html></html>');};
  try{
   const response:any=await new Promise(resolve=>listener({operation:'product',market:'amazon.com',asin},{url:'https://creative-raadar.vercel.app/',frameId:0,tab:{id:8}},resolve));
   assert.equal(response.html,'<html></html>');assert.equal(options.credentials,'omit');assert.equal(options.redirect,'error');assert(called.endsWith(asin));
   assert.equal(listener({operation:'product',market:'amazon.com',asin},{url:'https://evil.test/',frameId:0,tab:{id:8}},()=>{throw Error('must not respond');}),false);
  }finally{globalThis.fetch=original;}
+});
+test('40 requested videos continue onto page two instead of stopping after 20 products',async()=>{
+ const pages:string[]=[];let inspected=0;const events:any[]=[];
+ const request=async(operation:string,payload:any)=>{
+  if(operation==='ping')return{ready:true};
+  if(operation==='search'){
+   pages.push(payload.page);const offset=(Number(payload.page)-1)*20;
+   return{html:'<html><body>'+Array.from({length:20},(_,i)=>`<div data-component-type="s-search-result" data-asin="B${String(offset+i+1).padStart(9,'0')}"><h2>Rack</h2><a aria-label="100 ratings"></a></div>`).join('')+'</body></html>'};
+  }
+  inspected++;return{html:productHtml(payload.asin,[{creatorType:'customer',productAsin:payload.asin,videoURL:media(inspected)}])};
+ };
+ await searchInBrowser('clothes rack','amazon.com','forty',new AbortController().signal,e=>events.push(e),request,{videos:40,images:0});
+ assert.equal(events.filter(e=>e.type==='video').length,40);assert.equal(inspected,40);assert.deepEqual(pages,['1','2']);assert.equal(events.at(-1).count,40);
+});
+test('customer photos exclude seller pictures, unsafe hosts and mismatched variants',()=>{
+ const doc=readAmazonDocument(`<html><body><img src="https://m.media-amazon.com/seller.jpg"><div data-hook="review"><a data-hook="review-title">Good rack</a><img data-hook="review-image-tile" src="https://m.media-amazon.com/customer.jpg"><img data-hook="review-image-tile" src="https://evil.test/a.jpg"></div><div data-hook="review"><a data-hook="format-strip" href="/dp/B000000099"></a><img data-hook="review-image-tile" src="https://m.media-amazon.com/wrong.jpg"></div></body></html>`);
+ assert.deepEqual(readCustomerImages(doc,asin,'amazon.com').map(i=>i.url),['https://m.media-amazon.com/customer.jpg']);
+});
+test('images-only mode returns requested photos and no videos',async()=>{
+ const events:any[]=[];const request=async(operation:string,payload:any)=>operation==='ping'?{}:operation==='search'?{html:searchHtml}:{html:`<html><body><div data-hook="review">${Array.from({length:5},(_,i)=>`<img data-hook="review-image-tile" src="https://m.media-amazon.com/photo${i}.jpg">`).join('')}</div></body></html>`};
+ await searchInBrowser('clothes rack','amazon.com','photos',new AbortController().signal,e=>events.push(e),request,{videos:0,images:3});
+ assert.equal(events.filter(e=>e.type==='image').length,3);assert.equal(events.filter(e=>e.type==='video').length,0);
 });
