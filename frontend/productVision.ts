@@ -1,7 +1,8 @@
-import {type VisualScore} from './productIdentity';
+import type {ImageComparison} from './imageMatch';
 let worker:Worker|undefined;
 /** Aborting stops inference/download, not merely the UI; no late image can affect a new product. */
-export function scoreProductImage(image:Blob,labels:string[],signal:AbortSignal,progress:(text:string)=>void):Promise<VisualScore[]>{
+export function compareProductImages(image:Blob,candidates:{id:string;image:Blob}[],signal:AbortSignal,progress:(text:string)=>void):Promise<ImageComparison[]>{return runVision({image,candidates},signal,progress);}
+function runVision(payload:Record<string,unknown>,signal:AbortSignal,progress:(text:string)=>void):Promise<any[]>{
  signal.throwIfAborted();
  if(!worker)worker=new Worker(new URL('./productVision.worker.ts',import.meta.url),{type:'module'});
  const active=worker;const id=crypto.randomUUID();
@@ -13,6 +14,6 @@ export function scoreProductImage(image:Blob,labels:string[],signal:AbortSignal,
   const receive=(event:MessageEvent)=>{if(event.data.id!==id)return;if(event.data.progress){progress(event.data.progress);return;}cleanup();if(event.data.error)reject(Error(event.data.error));else resolve(event.data.scores);};
   const timer=setTimeout(()=>{cleanup();stop();reject(Error('تحميل نموذج الصورة استغرق وقتًا طويلًا؛ أعد المحاولة على اتصال أسرع'));},300000);
   active.addEventListener('message',receive);active.addEventListener('error',fail);signal.addEventListener('abort',abort,{once:true});
-  active.postMessage({id,image,labels});
+  active.postMessage({id,...payload});
  });
 }

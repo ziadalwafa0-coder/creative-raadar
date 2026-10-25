@@ -1,12 +1,19 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DOMParser} from 'linkedom';
-import {browserRequest,readAmazonDocument,readBrowserProducts,readCustomerImages,searchInBrowser} from './browserCollector';
+import {browserRequest,readAmazonDocument,readBrowserProducts,readCustomerImages,searchInBrowser,collectApprovedProduct} from './browserCollector';
 Object.assign(globalThis,{DOMParser});
 const asin='B000000001';const other='B000000002';
 const media=(i:number)=>`https://m.media-amazon.com/test-${i}.mp4`;
 const searchHtml=`<html><head><title>Amazon</title></head><body><div data-component-type="s-search-result" data-asin="${asin}"><h2>Rack one</h2><a aria-label="12 ratings"></a></div><div data-component-type="s-search-result" data-asin="${other}"><h2>Rack two</h2><a aria-label="1.2K ratings"></a></div></body></html>`;
 const productHtml=(source:string,items:object[])=>`<html><body><div id="customer-reviews_feature_div"></div><div data-video-items='${JSON.stringify(items)}'></div></body></html>`;
+test('confirming one product never fetches other ASINs to fill a request for 50 videos',async()=>{
+ const calls:any[]=[];const events:any[]=[];
+ const request=async(operation:string,payload:any)=>{calls.push({operation,...payload});return{html:productHtml(asin,[{creatorType:'customer',productAsin:asin,videoURL:media(1)},{creatorType:'customer',productAsin:other,videoURL:media(2)},{creatorType:'seller',productAsin:asin,videoURL:media(3)}])};};
+ await collectApprovedProduct({asin,title:'Confirmed model',ratingsCount:100,url:`https://www.amazon.com/dp/${asin}`},'amazon.com','exact',new AbortController().signal,e=>events.push(e),{videos:50,images:0},request);
+ assert.deepEqual(calls,[{operation:'product',asin,market:'amazon.com'}]);
+ assert.equal(events.filter(e=>e.type==='video').length,1);assert(events.some(e=>e.type==='warn'));assert.equal(events.at(-1).count,1);
+});
 test('browser parser sorts actual search-card counts and recognizes error-image page',()=>{
  assert.deepEqual(readBrowserProducts(readAmazonDocument(searchHtml),'amazon.com').map(h=>h.asin),[other,asin]);
  assert.throws(()=>readAmazonDocument('<html><head><title>Sorry! Something went wrong!</title></head><body></body></html>'),/رفض الطلب/);

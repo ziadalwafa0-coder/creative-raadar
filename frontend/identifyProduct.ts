@@ -1,27 +1,49 @@
 import {browserRequest,readAmazonDocument,readBrowserProducts,type BrowserProduct} from './browserCollector';
-import {chooseVisualIdentity,visualLabels,canonicalScores,productFamilies,matchesIdentity,type VisualScore,type ProductFamily} from './productIdentity';
-import {scoreProductImage} from './productVision';
-import type {Marketplace,ProductHit} from '../backend/src/types';
-export type IdentityProposal={query:string;family:ProductFamily;conflict:boolean;uncertain:boolean;alternatives:string[];products:BrowserProduct[]};
+import {productFamilies,matchesIdentity,type ProductFamily} from './productIdentity';
+import {compareProductImages} from './productVision';
+import {safeMediaUrl} from '../backend/src/utils';
+import type {Marketplace} from '../backend/src/types';
+import type {ImageComparison} from './imageMatch';
+export type MatchedProduct=BrowserProduct&{visualEvidence:ImageComparison};
+export type IdentityProposal={query:string;family:ProductFamily;conflict:boolean;uncertain:boolean;alternatives:string[];products:MatchedProduct[];inspected?:number};
 export async function identifyProduct(image:Blob,englishHint:string,market:Marketplace,signal:AbortSignal,progress:(text:string)=>void,onIdentity?:(proposal:IdentityProposal)=>void):Promise<IdentityProposal>{
- const labels=[...new Set([...visualLabels,englishHint])];
- const scores=canonicalScores(await scoreProductImage(image,labels,signal,progress));signal.throwIfAborted();
- const identity=chooseVisualIdentity(scores,englishHint);
- if(identity.family==='other')throw Error('الصورة لا تطابق نوعًا معروفًا بدرجة كافية. اكتب نوع المنتج بالتحديد أو جرّب صورة واضحة بخلفية بسيطة.');
- if(identity.conflict)identity.alternatives=[englishHint,...identity.alternatives].slice(0,4);
- onIdentity?.({...identity,products:[]});
- return findIdentityCandidates(image,identity,market,signal,progress);
+ // Never replace the supplied product name with an unrelated guessed image category.
+ const family=productFamilies.find(f=>f[2].test(englishHint))?.[0]||'custom';
+ const identity={query:englishHint,family,conflict:false,uncertain:true,alternatives:[],products:[]};
+ onIdentity?.(identity);return findIdentityCandidates(image,identity,market,signal,progress);
 }
-export async function findIdentityCandidates(image:Blob,identity:Omit<IdentityProposal,'products'>,market:Marketplace,signal:AbortSignal,progress:(text:string)=>void):Promise<IdentityProposal>{
- progress('جاري مقارنة الصورة بأسماء منتجات موجودة على أمازون…');
- const result=await browserRequest('search',{query:identity.query,market,page:'1'},signal);signal.throwIfAborted();
- const products=readBrowserProducts(readAmazonDocument(result.html),market).filter(p=>matchesIdentity(p.title,identity.query,identity.family));
- if(!products.length)throw Error('لم نجد منتجات توافق النوع والمواصفات على أمازون. عدّل الاسم أو جرّب متجرًا آخر؛ لم يتم جمع ريفيوهات لمنتج بديل.');
- const ranked=await scoreProductImage(image,products.map(p=>p.title),signal,progress);signal.throwIfAborted();
- return {...identity,products:rankProducts(products,ranked).slice(0,3)};
+export async function loadAmazonImage(url:string,signal:AbortSignal):Promise<Blob>{
+ if(!safeMediaUrl(url))throw Error('مصدر صورة غير مسموح');
+ const response=await fetch(url,{credentials:'omit',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(8000)])});
+ if(!response.ok||!/^image\/(jpeg|png|webp|avif)(?:;|$)/i.test(response.headers.get('content-type')||''))throw Error('تعذر قراءة صورة المنتج');
+ const reader=response.body?.getReader();if(!reader)throw Error('صورة غير قابلة للقراءة');
+ const chunks:Uint8Array<ArrayBuffer>[]=[];let size=0;
+ try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>4*1024*1024)throw Error('صورة كبيرة');chunks.push(value as Uint8Array<ArrayBuffer>);}}
+ finally{await reader.cancel().catch(()=>{});}
+ signal.throwIfAborted();return new Blob(chunks,{type:response.headers.get('content-type')!});
 }
-export function rankProducts(products:ProductHit[],scores:VisualScore[]){
- // Only actual titles and ASINs returned by the current Amazon search can become suggestions.
- const weights=new Map(scores.map(s=>[s.label,Number.isFinite(s.score)?s.score:0]));
- return [...products].sort((a,b)=>(weights.get(b.title)||0)-(weights.get(a.title)||0));
+export function selectImageMatches(products:BrowserProduct[],scores:ImageComparison[]):MatchedProduct[]{
+ const evidence=new Map(scores.filter(s=>s.accepted&&Number.isFinite(s.cosine)&&s.cosine>=0.92&&Number.isFinite(s.structure)&&s.structure>=0.875).map(s=>[s.id,s]));
+ return products.filter(p=>p.imageUrl&&evidence.has(p.asin)).map(p=>({...p,visualEvidence:evidence.get(p.asin)!})).sort((a,b)=>b.visualEvidence.cosine-a.visualEvidence.cosine);
+}
+export async function findIdentityCandidates(image:Blob,identity:Omit<IdentityProposal,'products'>,market:Marketplace,signal:AbortSignal,progress:(text:string)=>void,services={request:browserRequest,loadImage:loadAmazonImage,compare:compareProductImages}):Promise<IdentityProposal>{
+ const seen=new Set<string>();let inspected=0;
+ for(let page=1;page<=2;page++){
+  progress(`البحث عن نفس المنتج ثم فحص صور النتائج — صفحة ${page}…`);
+  const result=await services.request('search',{query:identity.query,market,page:String(page)},signal);signal.throwIfAborted();
+  const hits=readBrowserProducts(readAmazonDocument(result.html),market).filter(p=>!seen.has(p.asin));
+  if(!hits.length)break;for(const p of hits)seen.add(p.asin);
+  const products=hits.filter(p=>p.imageUrl&&matchesIdentity(p.title,identity.query,identity.family));
+  const candidates:{id:string;image:Blob}[]=[];
+  // Unreadable pictures are rejected, never approved by title as a fallback.
+  for(let i=0;i<products.length;i+=3){
+   const batch=await Promise.all(products.slice(i,i+3).map(async p=>{try{return{id:p.asin,image:await services.loadImage(p.imageUrl!,signal)};}catch{signal.throwIfAborted();return null;}}));
+   candidates.push(...batch.filter((p):p is {id:string;image:Blob}=>p!==null));
+  }
+  inspected+=products.length;if(!candidates.length)continue;
+  const scores=await services.compare(image,candidates,signal,progress);signal.throwIfAborted();
+  const matches=selectImageMatches(products,scores);
+  if(matches.length)return {...identity,products:matches.slice(0,3),inspected};
+ }
+ return {...identity,products:[],inspected};
 }

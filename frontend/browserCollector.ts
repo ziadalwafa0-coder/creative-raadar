@@ -27,6 +27,7 @@ export function browserRequest(operation:string,payload:Record<string,string>,si
 export function readAmazonDocument(html:string):Document{
  const doc=new DOMParser().parseFromString(html,'text/html');const text=doc.body.textContent||'';
  if(isAmazonErrorPage(doc.title,text))throw new SourceError('BLOCKED','أمازون رفض الطلب من اتصالك؛ جرّب لاحقًا');
+ if(/Click the button below to continue shopping/i.test(text))throw new SourceError('BLOCKED','أمازون أوقف الوصول للصفحة؛ تم إيقاف الفحص دون اعتماد منتجات بديلة');
  if(/Robot Check|validateCaptcha|Enter the characters you see below|verify.*human/i.test(text))throw new SourceError('CAPTCHA','أمازون طلب تحققًا بشريًا؛ تم إيقاف الجلب');
  if(doc.querySelector('form[name="signIn"]'))throw new SourceError('LOGIN_WALL','أمازون طلب تسجيل الدخول؛ الجلب المجاني يقرأ الصفحات العامة فقط');
  return doc;
@@ -54,6 +55,21 @@ export function readCustomerImages(doc:Document,asin:string,market:Marketplace):
   }
  }
  return found;
+}
+/** Image-approved searches are pinned to one ASIN, never broadened to fill the requested count. */
+export async function collectApprovedProduct(product:BrowserProduct,market:Marketplace,id:string,signal:AbortSignal,emit:(event:BrowserEvent)=>void,requested:MediaLimits,request=browserRequest){
+ if(!/^[A-Z0-9]{10}$/.test(product.asin))throw Error('معرّف منتج غير صحيح');
+ signal.throwIfAborted();emit({id,type:'progress',index:1,total:1,asin:product.asin});
+ const {html}=await request('product',{asin:product.asin,market},signal);signal.throwIfAborted();
+ const doc=readAmazonDocument(html);
+ const blocks=Array.from(doc.querySelectorAll('[data-video-items]'),n=>n.getAttribute('data-video-items')||'');
+ const videos=parseCustomerVideoBlocks(blocks,product.asin,market);
+ const images=readCustomerImages(doc,product.asin,market);
+ const seen=new Set<string>();let count=0,photos=0;
+ for(const video of videos){if(count>=requested.videos)break;if(seen.has(video.url))continue;seen.add(video.url);count++;emit({id,type:'video',video});}
+ seen.clear();for(const image of images){if(photos>=requested.images)break;if(seen.has(image.url))continue;seen.add(image.url);photos++;emit({id,type:'image',image});}
+ if(count<requested.videos||photos<requested.images)emit({id,type:'warn',reason:'العدد المتاح يخص المنتج المؤكّد فقط؛ لم نضف ريفيوهات منتجات أخرى لاستكمال العدد.'});
+ signal.throwIfAborted();emit({id,done:true,count});
 }
 export async function searchInBrowser(query:string,market:Marketplace,id:string,signal:AbortSignal,emit:(event:BrowserEvent)=>void,request=browserRequest,requested:MediaLimits={videos:50,images:0},acceptProduct?:(product:ProductHit)=>boolean,preferredAsin?:string){
  const limits={videos:Math.max(0,Math.min(50,Math.floor(requested.videos)||0)),images:Math.max(0,Math.min(50,Math.floor(requested.images)||0))};

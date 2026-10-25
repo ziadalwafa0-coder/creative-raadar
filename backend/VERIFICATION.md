@@ -88,3 +88,16 @@ Static runtime search for the prohibited review-list path and explicit Amazon si
 - Real Chrome conflict test: a clothes rack photo paired with the 9-tier shoe-rack name proposed Double Rod Clothes Rack with Wheels, displayed the conflict, and retained the original shoe-rack name as an alternative. Amazon returned HTTP 503 during this test; collection stopped with zero videos and no retry/bypass. No further live Amazon collection was attempted after that response.
 - Local real-model image smoke covered eight supplied product pictures. The small CLIP model confused the advertised mini chainsaw with other handheld appliances. Confirmation, alternatives and explicit name-only fallback are required safeguards; this is not a claim of universal image recognition accuracy.
 
+# Strict image-to-image matching and one-ASIN collection — 2026-10-25
+
+This section supersedes the image-to-title/category proposal behavior described below.
+
+- Image-assisted search now keeps the current translated product name. It no longer changes an iron into a dryer based on a forced category guess.
+- Candidate pictures are fetched only from allowlisted Amazon media hosts, with omitted credentials, redirects rejected, an 8-second timeout and a 4 MB body cap. Unreadable or missing images cannot fall back to title approval.
+- The browser worker compares actual image embeddings from CLIP's vision encoder plus a separate 64-bit image structure signature. Absolute conservative gates (cosine >= 0.92, structure >= 0.875, nonblank contrast) can reject every result; there is no forced top-three fallback. These heuristics are not a calibrated guarantee of exact SKU, brand, size or model. Advertisements/different angles may be rejected even for the same product.
+- Explicit tier/model conflicts, missing requested tier count, covers, wood, double rails and wheels are filtered. At most two search pages are examined. Accepted results display the uploaded picture beside the actual Amazon picture for confirmation.
+- Confirmation collects from the selected ASIN only. It never searches other products to inflate the count to 40/50. The UI explains a shortfall.
+- Controlled tests: 27 frontend tests and 12 backend tests passed; frontend/backend TypeScript checks and production build passed. Coverage includes iron-to-dryer drift prevention, unreadable-image rejection, no title-only fallback, no forced best-worst result, one-ASIN isolation even when 50 were requested, stale-image cancellation and model/tier constraints.
+- Real model CPU smoke: four supplied product images each matched themselves and rejected all six cross-product pairs. Real Chrome/WASM worker: same shoe-rack image cosine 1 / structure 1 -> accepted; clothes-rack image cosine 0.771 / structure 0.578 -> rejected. This was an explicitly local model harness, not an Amazon collection claim.
+- A live Amazon product page returned a Continue Shopping access wall. No challenge was clicked or bypassed and no further live Amazon collection was attempted in this run. Therefore a new exact-match-to-live-review end-to-end run is not claimed. The last successful live collection belongs to the earlier version below.
+

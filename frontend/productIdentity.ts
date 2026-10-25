@@ -78,7 +78,11 @@ export function matchesIdentity(title:string,query:string,family:ProductFamily){
  }else if(!category[2].test(title))return false;
  const wanted=query.match(/\b(\d+)\s*[- ]?tier\b/i)?.[1];
  const actual=title.match(/\b(\d+)\s*[- ]?tier\b/i)?.[1];
- if(wanted&&actual&&wanted!==actual)return false;
+ if(wanted&&wanted!==actual)return false;
+ const model=query.match(/\b[A-Z]{1,6}-\d{2,6}\b/i)?.[0];
+ if(model&&!title.toLowerCase().includes(model.toLowerCase()))return false;
+ if(/double rod|dual rail|double rail/i.test(query)&&!/(?:double|dual|two|2)[ -]?(?:rod|rail|bar)/i.test(title))return false;
+ if(/with wheels/i.test(query)&&!/wheel|rolling|caster/i.test(title))return false;
  if(/with cover|covered/i.test(query)&&/shoe/i.test(query)&&!/cover|enclos|zipper|closet/i.test(title))return false;
  if(/wood|bamboo/i.test(query)&&/shoe/i.test(query)&&!/wood|bamboo/i.test(title))return false;
  return true;
