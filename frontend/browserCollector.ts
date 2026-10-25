@@ -11,7 +11,13 @@ export function browserRequest(operation:string,payload:Record<string,string>,si
  return new Promise((resolve,reject)=>{
   const cleanup=()=>{clearTimeout(timer);window.removeEventListener('message',receive);signal.removeEventListener('abort',abort);};
   const abort=()=>{cleanup();window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),target:id,operation:'cancel'},location.origin);reject(signal.reason||Error('تم إلغاء البحث'));};
-  const receive=(event:MessageEvent)=>{if(event.source!==window||event.origin!==location.origin||event.data?.channel!=='cr-browser-response'||event.data.id!==id)return;cleanup();if(event.data.error)reject(['BLOCKED','NETWORK','CAPTCHA','LOGIN_WALL'].includes(event.data.code)?new SourceError(event.data.code,event.data.error):Error(event.data.error));else resolve(event.data);};
+  const receive=(event:MessageEvent)=>{
+   if(event.source!==window||event.origin!==location.origin||event.data?.channel!=='cr-browser-response'||event.data.id!==id||event.data.protocol!==2)return;
+   cleanup();
+   if(event.data.error)reject(['BLOCKED','NETWORK','CAPTCHA','LOGIN_WALL'].includes(event.data.code)?new SourceError(event.data.code,event.data.error):Error(event.data.error));
+   else if(operation==='search'&&event.data.page!==Number(payload.page||1))reject(Error('نسخة الإضافة المحمّلة قديمة؛ حمّل النسخة الجديدة وفكها في نفس فولدر الإضافة ثم اضغط Reload. النسخة القديمة تعيد أول صفحة بدل الانتقال للصفحات التالية.'));
+   else resolve(event.data);
+  };
   const timer=setTimeout(()=>{cleanup();reject(Error(operation==='ping'?'ثبّت إضافة Creative Radaar المجانية ثم أعد تحميل الصفحة':'انقطع اتصال الإضافة؛ أعد المحاولة'));},timeout);
   signal.addEventListener('abort',abort,{once:true});window.addEventListener('message',receive);
   window.postMessage({channel:'cr-browser-request',id,operation,...payload},location.origin);
@@ -53,7 +59,7 @@ export async function searchInBrowser(query:string,market:Marketplace,id:string,
  const capability=await request('ping',{},signal,1500);signal.throwIfAborted();
  const seen=new Set<string>();const seenImages=new Set<string>();const visited=new Set<string>();let blocked=false;
  for(let page=1;page<=5&&(seen.size<limits.videos||seenImages.size<limits.images)&&!blocked;page++){
-  if(page>1&&capability.version&&capability.pagination!==true)throw Error('حدّث الإضافة بالضغط على Reload في صفحة إضافات Chrome لتفعيل البحث في الصفحات التالية');
+  if(page>1&&capability.pagination!==true)throw Error('حدّث الإضافة بالضغط على Reload في صفحة إضافات Chrome لتفعيل البحث في الصفحات التالية');
   const result=await request('search',{query,market,page:String(page)},signal);signal.throwIfAborted();
   if(result.page!==undefined&&result.page!==page)throw Error('أعد تحميل الإضافة والصفحة لتفعيل الانتقال الصحيح بين صفحات البحث');
   const {html}=result;

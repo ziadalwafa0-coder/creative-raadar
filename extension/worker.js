@@ -16,6 +16,7 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
   let origin;try{origin=new URL(sender.url).origin;}catch{return false;}
   if(!origins.has(origin)||sender.frameId!==0||!Number.isInteger(sender.tab?.id))return false;
   const tab=sender.tab.id;
+  if(message.operation==='ping'){respond({ready:true,protocol:2,version:'1.2.1',pagination:true});return false;}
   if(message.operation==='cancel'){const current=active.get(tab);if(current?.id===message.target){current.controller.abort();active.delete(tab);}respond({ok:true});return false;}
   let url;try{url=requestUrl(message);}catch(e){respond({error:e.message});return false;}
   active.get(tab)?.controller.abort();const controller=new AbortController();active.set(tab,{id:message.id,controller});
@@ -29,8 +30,8 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
       const reader=response.body.getReader();let bytes=0;const decoder=new TextDecoder();let html='';
       try{while(true){const chunk=await reader.read();if(chunk.done)break;bytes+=chunk.value.byteLength;if(bytes>8*1024*1024)throw Error('صفحة المصدر أكبر من الحد المسموح');html+=decoder.decode(chunk.value,{stream:true});}html+=decoder.decode();}
       finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
-      respond({html,page:message.operation==='search'?Number(message.page||1):undefined});
-    }catch(e){respond({error:controller.signal.aborted?'تم إلغاء البحث':e instanceof Error?e.message:'تعذر الاتصال بأمازون',code:e.code});}
+      respond({protocol:2,html,page:message.operation==='search'?Number(message.page||1):undefined});
+    }catch(e){respond({protocol:2,error:controller.signal.aborted?'تم إلغاء البحث':e instanceof Error?e.message:'تعذر الاتصال بأمازون',code:e?.code});}
     finally{if(active.get(tab)?.controller===controller)active.delete(tab);}
   })();return true;
 });

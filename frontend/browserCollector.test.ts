@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DOMParser} from 'linkedom';
-import {readAmazonDocument,readBrowserProducts,readCustomerImages,searchInBrowser} from './browserCollector';
+import {browserRequest,readAmazonDocument,readBrowserProducts,readCustomerImages,searchInBrowser} from './browserCollector';
 Object.assign(globalThis,{DOMParser});
 const asin='B000000001';const other='B000000002';
 const media=(i:number)=>`https://m.media-amazon.com/test-${i}.mp4`;
@@ -37,6 +37,8 @@ test('extension worker only permits fixed public Amazon operations and omits cre
  assert.throws(()=>requestUrl({operation:'search',market:'evil.test',query:'rack'}));
  assert.throws(()=>requestUrl({operation:'product',market:'amazon.com',asin:'../../ap/signin'}));
  assert.equal(requestUrl({operation:'product',market:'amazon.com',asin}),`https://www.amazon.com/dp/${asin}`);
+ const ready:any=await new Promise(resolve=>listener({operation:'ping'},{url:'https://creative-raadar.vercel.app/',frameId:0,tab:{id:8}},resolve));
+ assert.equal(ready.protocol,2);assert.equal(ready.version,'1.2.1');assert.equal(ready.pagination,true);
  assert(requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'2'}).endsWith('&page=2'));
  assert.throws(()=>requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'99'}));
  const original=globalThis.fetch;globalThis.fetch=async(url:any,init:any)=>{called=String(url);options=init;return new Response('<html></html>');};
@@ -49,7 +51,7 @@ test('extension worker only permits fixed public Amazon operations and omits cre
 test('40 requested videos continue onto page two instead of stopping after 20 products',async()=>{
  const pages:string[]=[];let inspected=0;const events:any[]=[];
  const request=async(operation:string,payload:any)=>{
-  if(operation==='ping')return{ready:true};
+  if(operation==='ping')return{ready:true,pagination:true};
   if(operation==='search'){
    pages.push(payload.page);const offset=(Number(payload.page)-1)*20;
    return{html:'<html><body>'+Array.from({length:20},(_,i)=>`<div data-component-type="s-search-result" data-asin="B${String(offset+i+1).padStart(9,'0')}"><h2>Rack</h2><a aria-label="100 ratings"></a></div>`).join('')+'</body></html>'};
@@ -67,4 +69,19 @@ test('images-only mode returns requested photos and no videos',async()=>{
  const events:any[]=[];const request=async(operation:string,payload:any)=>operation==='ping'?{}:operation==='search'?{html:searchHtml}:{html:`<html><body><div data-hook="review">${Array.from({length:5},(_,i)=>`<img data-hook="review-image-tile" src="https://m.media-amazon.com/photo${i}.jpg">`).join('')}</div></body></html>`};
  await searchInBrowser('clothes rack','amazon.com','photos',new AbortController().signal,e=>events.push(e),request,{videos:0,images:3});
  assert.equal(events.filter(e=>e.type==='image').length,3);assert.equal(events.filter(e=>e.type==='video').length,0);
+});
+test('old extension replies cannot win a race against the current worker protocol',async()=>{
+ const oldWindow=(globalThis as any).window,oldLocation=(globalThis as any).location;
+ const fake=new EventTarget() as any;const origin='http://127.0.0.1:5173';
+ fake.postMessage=(message:any)=>{
+  if(message.channel!=='cr-browser-request')return;
+  queueMicrotask(()=>{
+   for(const data of [{channel:'cr-browser-response',id:message.id,ready:true,version:'1.2.0'},{channel:'cr-browser-response',id:message.id,protocol:2,ready:true,version:'1.2.1'}]){
+    const event=new Event('message');Object.assign(event,{source:fake,origin,data});fake.dispatchEvent(event);
+   }
+  });
+ };
+ Object.assign(globalThis,{window:fake,location:{origin}});
+ try{const result=await browserRequest('ping',{},new AbortController().signal,1000);assert.equal(result.version,'1.2.1');assert.equal(result.protocol,2);}
+ finally{if(oldWindow===undefined)delete(globalThis as any).window;else(globalThis as any).window=oldWindow;if(oldLocation===undefined)delete(globalThis as any).location;else(globalThis as any).location=oldLocation;}
 });

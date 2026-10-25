@@ -1,0 +1,71 @@
+{
+  "method": "Node network test of shared collector; not Chrome E2E",
+  "results": [
+    {
+      "query": "9 tier shoe rack with cover",
+      "requestedVideos": 50,
+      "videos": 50,
+      "images": 3,
+      "pages": [
+        "1",
+        "2"
+      ],
+      "productsInspected": 23,
+      "firstVideoMs": 4359,
+      "elapsedMs": 54972,
+      "asins": [
+        "B08KZS81K8",
+        "B09L6Z6679",
+        "B0DFTMP762",
+        "B0F2N5MGV3",
+        "B0CDC4ZY8K",
+        "B0BWF67TLP",
+        "B0B6ZSSWRL",
+        "B0B6ZWHXXJ",
+        "B0DNF1YHH3",
+        "B0C14NFZ72",
+        "B0GQLK9PDP",
+        "B0GXZ9N3N2",
+        "B0GXZCQJN1",
+        "B084JVLK17",
+        "B09C7FKPDZ",
+        "B09SB3J9PF"
+      ],
+      "warnings": []
+    },
+    {
+      "query": "car vacuum cleaner",
+      "requestedVideos": 50,
+      "videos": 36,
+      "images": 3,
+      "pages": [
+        "1",
+        "2",
+        "3"
+      ],
+      "productsInspected": 32,
+      "firstVideoMs": 3849,
+      "elapsedMs": 72215,
+      "asins": [
+        "B06ZY896ZM",
+        "B0FWQMPP4C",
+        "B0CQYTNNW7",
+        "B0F8QG3MH9",
+        "B00Y5BX674",
+        "B0DGQ7Y5ZC",
+        "B0H5WHSTPQ",
+        "B0H5D8CRKY",
+        "B07QXWG93C",
+        "B0DQTVLB56",
+        "B0C5T7MJBN",
+        "B0HBPBK83D",
+        "B0G18RKV78",
+        "B0GTC14BFW"
+      ],
+      "warnings": [
+        "قسم مراجعات العملاء لم يظهر لهذا المنتج"
+      ],
+      "error": "أمازون لم يسمح بقراءة الصفحة (503)"
+    }
+  ]
+}
