@@ -110,3 +110,11 @@ This section supersedes the image-to-title/category proposal behavior described 
 - Local controlled checks: 31 extension/frontend tests and 12 backend tests passed, along with TypeScript and build. Tests cover public-only snapshot minimization, no credential reads, challenge refusal, ASIN binding, 503 cooldown and a read operation that makes zero network fetch calls.
 - Updated the known unpacked folder `C:/Users/Al Asdikaa/Documents/Codex/Creative-Radaar-Chrome-1.2.1` to manifest/worker 1.2.2. After the user's first Reload, actual Chrome still responded with 1.2.1 and did not answer the new reader operation. The installed folder path was requested to resolve this mismatch. A real Chrome customer-review import with 1.2.2 is not yet claimed.
 
+# Open-page reader verified in Chrome — 2026-10-25
+
+- User registered the clean folder `C:/Users/Al Asdikaa/Documents/Codex/Creative-Radaar-Chrome-1.2.2`. Actual frontend handshake confirmed 1.2.2; listing open Amazon product tabs succeeded.
+- Opened the normally rendered Amazon page B0B6ZSSWRL in Chrome without clicking any challenge. User-visible selection in the app imported three real customer videos (R3PU9JAB126EDR, R2RUYDQRGQUIFK, R1TOPVNCA12RHV) and two customer images, all bound to that ASIN. No source fetch is performed by the import operation.
+- Actual video R2RUYDQRGQUIFK reached readyState 4, currentTime 19.30 s, duration 28.95 s. MP4 download completed at `D:/Ziad/Downloads/Creative-Radaar-B0B6ZSSWRL-1792951136928.mp4`, 17,092,548 bytes. The browser download-event wait timed out at 25 seconds, but the resulting file was confirmed on disk. This is one-video playback/download evidence, not a 50-video guarantee.
+- One subsequent page-read attempt timed out while the Amazon tab was in the background; returning to the Amazon page and reading again succeeded. UI guidance now distinguishes this from a 503.
+- Added explicit media-ticket 401 handling: request sign-in without deleting imported videos as invalid media. Tests distinguish session expiration from source/video unavailability. Current controlled checks: 32 frontend/extension tests and 12 backend tests passed; TypeScript/build passed.
+

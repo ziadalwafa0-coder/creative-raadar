@@ -1,7 +1,8 @@
 import {useEffect,useRef,useState} from 'react';
 import type Hls from 'hls.js';
 import type {ReviewVideo} from '../backend/src/types';
-export function ReviewPlayer({video,api,token,onFailed}:{video:ReviewVideo;api:string;token:string;onFailed:()=>void}){
+import {mediaTicket,SessionExpired} from './mediaTicket';
+export function ReviewPlayer({video,api,token,onFailed,onAuthExpired}:{video:ReviewVideo;api:string;token:string;onFailed:()=>void;onAuthExpired:()=>void}){
  const element=useRef<HTMLVideoElement>(null);const hls=useRef<Hls|null>(null);const request=useRef<AbortController|null>(null);const failed=useRef(false);
  const disposed=useRef(false);
  const [ready,setReady]=useState(false);const [busy,setBusy]=useState(false);const [near,setNear]=useState(false);
@@ -15,8 +16,7 @@ export function ReviewPlayer({video,api,token,onFailed}:{video:ReviewVideo;api:s
  const play=async()=>{
   if(busy||ready)return;setBusy(true);const abort=new AbortController();request.current=abort;
   try{
-   const response=await fetch(api+'/api/media-ticket',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({url:video.url}),signal:abort.signal});
-   if(!response.ok)throw Error('media unavailable');const {path}=await response.json();abort.signal.throwIfAborted();
+   const path=await mediaTicket(api,token,video.url,abort.signal);abort.signal.throwIfAborted();
    const node=element.current;if(!node)return;
    if(video.type==='hls'&&!node.canPlayType('application/vnd.apple.mpegurl')){
     const {default:Hls}=await import('hls.js');abort.signal.throwIfAborted();
@@ -26,7 +26,7 @@ export function ReviewPlayer({video,api,token,onFailed}:{video:ReviewVideo;api:s
     player.loadSource(api+path);player.attachMedia(node);
    }else{node.src=api+path;void node.play().catch(()=>{});}
    setReady(true);
-  }catch{if(!abort.signal.aborted)fail();}finally{if(!abort.signal.aborted)setBusy(false);}
+  }catch(error){if(!abort.signal.aborted){if(error instanceof SessionExpired)onAuthExpired();else fail();}}finally{if(!abort.signal.aborted)setBusy(false);}
  };
  return <div className="relative rounded-xl overflow-hidden bg-[#edf2ef]"><video ref={element} controls={ready} preload="none" playsInline poster={near?video.poster:undefined} onError={fail} className="w-full h-56 object-contain"/>{!ready&&<button type="button" onClick={play} disabled={busy} className="absolute inset-0 grid place-items-center bg-black/10"><span className="bg-white rounded-full px-5 py-3">{busy?'جاري تجهيز الفيديو…':'▶ تشغيل'}</span></button>}</div>;
 }
