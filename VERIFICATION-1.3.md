@@ -23,4 +23,13 @@ An app heartbeat keeps the MV3 worker alive only while an active search/local im
 
 ## Limits
 
-Counts are requested ceilings, not guaranteed availability. No live 40/50-video run or eleven-product benchmark is claimed for this release. Amazon can require a challenge/sign-in or refuse a page; the job then stops for the user. Standard desktop Chrome is required. Results clear when changing inputs or refreshing. This report records the tested local flow; production checks are recorded after release.
+Counts are requested ceilings, not guaranteed availability. No live 50-video run or eleven-product benchmark is claimed for this release. Amazon can require a challenge/sign-in or refuse a page; the job then stops for the user. Standard desktop Chrome is required. Results clear when changing inputs or refreshing.
+
+## Production verification
+
+Implementation commit `31823cac839fba2413a3b4ee14e000bc49fa47b4` deployed READY as `dpl_AJEKL6gkJFgxG7FLR9bcZyJSVGuh`, aliased to https://creative-raadar.vercel.app/. Public HTTP 200; downloaded extension manifest, reader, worker and bridge match the committed source (normalizing checkout line endings), version 1.3.0.
+
+- Fresh ZALS login and actual extension version 1.3.0 confirmed in the rendered app.
+- Direct B0B6ZSSWRL request returned **3/3 customer videos + 2/2 customer photos**. The second review R2RUYDQRGQUIFK played: readyState 4, duration 28.9503 s, currentTime 24.305806 s, no error. Download produced `D:/Ziad/Downloads/Creative-Radaar-B0B6ZSSWRL-1792957523624.mp4`, 17,092,548 bytes, verified MP4 `ftyp` signature.
+- Changing to Arabic `المكواه المحمولة`, videos-only, **40 requested**, immediately cleared the shoe cards. The app progressed through 26/40 and then finished **40/40**, without alerts. These are name-only results across multiple iron models, not the user's exact green SKU. Evidence screenshot outside the checkout: `creative-radaar-130-production-40.png`.
+- This verifies retrieval/rendering of 40 distinct customer media entries for that query, not full playback/download of every one of the 40 videos. The exact-product playback/download sample above was verified separately.
