@@ -5,7 +5,7 @@ import {safeMediaUrl} from '../backend/src/utils';
 import type {Marketplace} from '../backend/src/types';
 import type {ImageComparison} from './imageMatch';
 export type MatchedProduct=BrowserProduct&{visualEvidence:ImageComparison};
-export type IdentityProposal={query:string;family:ProductFamily;conflict:boolean;uncertain:boolean;alternatives:string[];products:MatchedProduct[];inspected?:number};
+export type IdentityProposal={query:string;family:ProductFamily;conflict:boolean;uncertain:boolean;alternatives:string[];products:MatchedProduct[];inspected?:number;compared?:number};
 export async function identifyProduct(image:Blob,englishHint:string,market:Marketplace,signal:AbortSignal,progress:(text:string)=>void,onIdentity?:(proposal:IdentityProposal)=>void):Promise<IdentityProposal>{
  // Never replace the supplied product name with an unrelated guessed image category.
  const family=productFamilies.find(f=>f[2].test(englishHint))?.[0]||'custom';
@@ -27,7 +27,7 @@ export function selectImageMatches(products:BrowserProduct[],scores:ImageCompari
  return products.filter(p=>p.imageUrl&&evidence.has(p.asin)).map(p=>({...p,visualEvidence:evidence.get(p.asin)!})).sort((a,b)=>b.visualEvidence.cosine-a.visualEvidence.cosine);
 }
 export async function findIdentityCandidates(image:Blob,identity:Omit<IdentityProposal,'products'>,market:Marketplace,signal:AbortSignal,progress:(text:string)=>void,services={request:browserRequest,loadImage:loadAmazonImage,compare:compareProductImages}):Promise<IdentityProposal>{
- const seen=new Set<string>();let inspected=0;
+ const seen=new Set<string>();let inspected=0,compared=0;
  for(let page=1;page<=2;page++){
   progress(`البحث عن نفس المنتج ثم فحص صور النتائج — صفحة ${page}…`);
   const result=await services.request('search',{query:identity.query,market,page:String(page)},signal);signal.throwIfAborted();
@@ -41,9 +41,10 @@ export async function findIdentityCandidates(image:Blob,identity:Omit<IdentityPr
    candidates.push(...batch.filter((p):p is {id:string;image:Blob}=>p!==null));
   }
   inspected+=products.length;if(!candidates.length)continue;
-  const scores=await services.compare(image,candidates,signal,progress);signal.throwIfAborted();
+  const scores=await services.compare(image,candidates,signal,progress);signal.throwIfAborted();compared+=candidates.length;
   const matches=selectImageMatches(products,scores);
-  if(matches.length)return {...identity,products:matches.slice(0,3),inspected};
+  if(matches.length)return {...identity,products:matches.slice(0,3),inspected,compared};
  }
- return {...identity,products:[],inspected};
+ if(inspected&&!compared)throw Error('وجدنا منتجات مناسبة للاسم لكن تعذر قراءة صورها؛ لم يكتمل فحص المطابقة.');
+ return {...identity,products:[],inspected,compared};
 }

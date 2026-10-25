@@ -6,22 +6,49 @@ export interface ReviewImage {url:string;sourceAsin:string;sourceUrl:string;titl
 export type BrowserProduct=ProductHit&{imageUrl?:string};
 export type BrowserEvent=SearchEvent|{id:string;type:'image';image:ReviewImage};
 export interface MediaLimits {videos:number;images:number}
+const browserJobs=new WeakMap<AbortSignal,string>();
+export async function beginBrowserSession(jobId:string,signal:AbortSignal){
+ const capability=await browserRequest('ping',{},signal,1800);
+ if(capability.multipleCollectors)throw Error('في أكثر من نسخة للإضافة مفعّلة. اقفل النسخ القديمة وسيب Creative Radaar 1.3.0 فقط ثم أعد تحميل الموقع.');
+ if(!capability.browserNavigation)throw Error('البحث الجديد يحتاج إضافة Creative Radaar 1.3.0؛ حدّثها لتفعيل البحث من تبويب Chrome بدل طلبات الجلب القديمة.');
+ signal.throwIfAborted();browserJobs.set(signal,jobId);
+ // Chrome may suspend an idle MV3 worker while local image inference is running.
+ // This heartbeat reads no Amazon page and ends with the ephemeral search session.
+ const heartbeat=setInterval(()=>window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),operation:'ping'},location.origin),20000);
+ const stop=()=>{clearInterval(heartbeat);window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),operation:'stop_browser',jobId},location.origin);};
+ signal.addEventListener('abort',stop,{once:true});
+ try{await browserRequest('begin_browser',{jobId},signal,5000);return()=>clearInterval(heartbeat);}
+ catch(e){clearInterval(heartbeat);signal.removeEventListener('abort',stop);browserJobs.delete(signal);throw e;}
+}
 
-export function browserRequest(operation:string,payload:Record<string,string>,signal:AbortSignal,timeout=30000):Promise<any>{
+export function browserRequest(operation:string,payload:Record<string,string>,signal:AbortSignal,timeout=60000):Promise<any>{
  signal.throwIfAborted();const id=crypto.randomUUID();
+ const automated=operation==='search'||operation==='product';
+ const jobId=browserJobs.get(signal);
+ if(automated&&!jobId)return Promise.reject(Error('ابدأ البحث من الموقع لتفعيل جلسة Chrome الجديدة.'));
  return new Promise((resolve,reject)=>{
-  const cleanup=()=>{clearTimeout(timer);window.removeEventListener('message',receive);signal.removeEventListener('abort',abort);};
+  let pingTimer:ReturnType<typeof setTimeout>|undefined;const pingReplies:any[]=[];
+  const cleanup=()=>{clearTimeout(timer);clearTimeout(pingTimer);window.removeEventListener('message',receive);signal.removeEventListener('abort',abort);};
   const abort=()=>{cleanup();window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),target:id,operation:'cancel'},location.origin);reject(signal.reason||Error('تم إلغاء البحث'));};
   const receive=(event:MessageEvent)=>{
-   if(event.source!==window||event.origin!==location.origin||event.data?.channel!=='cr-browser-response'||event.data.id!==id||event.data.protocol!==2)return;
+   if(event.source!==window||event.origin!==location.origin||event.data?.channel!=='cr-browser-response'||event.data.id!==id)return;
+   if(operation==='ping'){
+    pingReplies.push(event.data);
+    if(event.data.protocol===2&&!pingTimer)pingTimer=setTimeout(()=>{
+     cleanup();const valid=pingReplies.filter(r=>r.protocol===2&&!r.error).sort((a,b)=>String(b.version).localeCompare(String(a.version),undefined,{numeric:true}));
+     if(!valid.length)reject(Error('الإضافة لم ترد بشكل صحيح'));else resolve({...valid[0],multipleCollectors:pingReplies.length>1});
+    },250);
+    return;
+   }
+   if(event.data.protocol!==2||automated&&event.data.transport!=='tab')return;
    cleanup();
    if(event.data.error)reject(['BLOCKED','NETWORK','CAPTCHA','LOGIN_WALL'].includes(event.data.code)?new SourceError(event.data.code,event.data.error):Error(event.data.error));
    else if(operation==='search'&&event.data.page!==Number(payload.page||1))reject(Error('نسخة الإضافة المحمّلة قديمة؛ حمّل النسخة الجديدة وفكها في نفس فولدر الإضافة ثم اضغط Reload. النسخة القديمة تعيد أول صفحة بدل الانتقال للصفحات التالية.'));
    else resolve(event.data);
   };
-  const timer=setTimeout(()=>{cleanup();reject(Error(operation==='ping'?'ثبّت إضافة Creative Radaar المجانية ثم أعد تحميل الصفحة':operation==='read_open_product'?'صفحة أمازون لم ترد. ارجع إليها حتى تظهر بشكل طبيعي، ثم ارجع للموقع واقرأها مرة أخرى.':'انقطع اتصال الإضافة؛ أعد المحاولة'));},timeout);
+  const timer=setTimeout(()=>{cleanup();if(automated)window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),target:id,operation:'cancel'},location.origin);reject(Error(operation==='ping'?'ثبّت إضافة Creative Radaar المجانية ثم أعد تحميل الصفحة':operation==='read_open_product'?'صفحة أمازون لم ترد. ارجع إليها حتى تظهر بشكل طبيعي، ثم ارجع للموقع واقرأها مرة أخرى.':'تبويب أمازون لم يكتمل في الوقت المحدد؛ راجعه قبل بدء بحث آخر.'));},timeout);
   signal.addEventListener('abort',abort,{once:true});window.addEventListener('message',receive);
-  window.postMessage({channel:'cr-browser-request',id,operation,...payload},location.origin);
+  window.postMessage({channel:'cr-browser-request',id,operation,...payload,...(automated?{transport:'tab',jobId}:{})},location.origin);
  });
 }
 export function readAmazonDocument(html:string):Document{
@@ -35,11 +62,13 @@ export function readAmazonDocument(html:string):Document{
 export function readBrowserProducts(doc:Document,market:Marketplace):BrowserProduct[]{
  const hits:BrowserProduct[]=[];
  for(const row of doc.querySelectorAll('[data-component-type="s-search-result"][data-asin]')){
-  const asin=row.getAttribute('data-asin')||'';const title=row.querySelector('h2')?.textContent?.trim()||row.querySelector('img.s-image')?.getAttribute('alt')||'';
+  const asin=row.getAttribute('data-asin')||'';
+  const titleNode=row.querySelector('h2[aria-label],a.a-text-normal h2,a[href*="/dp/"] h2')||row.querySelector('h2');
+  const title=titleNode?.getAttribute('aria-label')||titleNode?.textContent?.trim()||row.querySelector('img.s-image')?.getAttribute('alt')||'';
   if(!/^[A-Z0-9]{10}$/.test(asin)||!title)continue;
   const count=row.querySelector('a[aria-label*="ratings"], a[aria-label*="تقييم"]')?.getAttribute('aria-label')||row.querySelector('.s-underline-text')?.textContent;
   const image=row.querySelector('img.s-image')?.getAttribute('src')||'';
-  hits.push({asin,title,ratingsCount:parseRatingsCount(count),url:`https://${markets[market].host}/dp/${asin}`,...(safeMediaUrl(image)?{imageUrl:image}:{})});if(hits.length===20)break;
+  hits.push({asin,title,ratingsCount:parseRatingsCount(count),url:`https://${markets[market].host}/dp/${asin}`,...(safeMediaUrl(image)?{imageUrl:image}:{})});if(hits.length===100)break;
  }
  if(!hits.length&&!/No results for|لم نعثر|لا توجد نتائج/i.test(doc.body.textContent||''))throw new SourceError('PARSE_EMPTY','لم تظهر نتائج منتجات قابلة للقراءة');
  return [...new Map(hits.map(h=>[h.asin,h])).values()].sort((a,b)=>b.ratingsCount-a.ratingsCount);

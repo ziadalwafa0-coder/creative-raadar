@@ -18,6 +18,10 @@ test('browser parser sorts actual search-card counts and recognizes error-image 
  assert.deepEqual(readBrowserProducts(readAmazonDocument(searchHtml),'amazon.com').map(h=>h.asin),[other,asin]);
  assert.throws(()=>readAmazonDocument('<html><head><title>Sorry! Something went wrong!</title></head><body></body></html>'),/رفض الطلب/);
 });
+test('Amazon brand headings cannot replace the actual product title',()=>{
+ const html=`<html><body><div data-component-type="s-search-result" data-asin="${asin}"><h2>Calmootey</h2><a class="a-text-normal" href="/dp/${asin}"><h2 aria-label="Calmootey 9 Tier Shoe Rack with Cover">Calmootey 9 Tier Shoe Rack with Cover</h2></a></div></body></html>`;
+ assert.equal(readBrowserProducts(readAmazonDocument(html),'amazon.com')[0].title,'Calmootey 9 Tier Shoe Rack with Cover');
+});
 test('visual identity filters wrong products and continues if an entire search page is unrelated',async()=>{
  const events:any[]=[];const inspected:string[]=[];const pages:string[]=[];
  const request=async(operation:string,payload:any)=>{
@@ -47,7 +51,7 @@ test('challenge stops the run instead of repeatedly hitting more products',async
  await searchInBrowser('clothes rack','amazon.com','run',new AbortController().signal,e=>events.push(e),request);
  assert.equal(products,1);assert(events.some(e=>e.code==='CAPTCHA'&&e.type==='warn'&&e.reason.includes('تحقق')));assert.equal(events.at(-1).count,0);
 });
-test('extension worker only permits fixed public Amazon operations and omits credentials',async()=>{
+test('extension worker only permits fixed Amazon URLs and exposes the tab collector capability',async()=>{
  let listener:any;let options:any;let called='';
  Object.assign(globalThis,{chrome:{runtime:{onMessage:{addListener:(fn:any)=>{listener=fn;}}}}});
  const {requestUrl}=await import('../extension/worker.js');
@@ -55,15 +59,12 @@ test('extension worker only permits fixed public Amazon operations and omits cre
  assert.throws(()=>requestUrl({operation:'product',market:'amazon.com',asin:'../../ap/signin'}));
  assert.equal(requestUrl({operation:'product',market:'amazon.com',asin}),`https://www.amazon.com/dp/${asin}`);
  const ready:any=await new Promise(resolve=>listener({operation:'ping'},{url:'https://creative-raadar.vercel.app/',frameId:0,tab:{id:8}},resolve));
- assert.equal(ready.protocol,2);assert.equal(ready.version,'1.2.2');assert.equal(ready.pagination,true);
+ assert.equal(ready.protocol,2);assert.equal(ready.version,'1.3.0');assert.equal(ready.pagination,true);
  assert(requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'2'}).endsWith('&page=2'));
  assert.throws(()=>requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'99'}));
- const original=globalThis.fetch;globalThis.fetch=async(url:any,init:any)=>{called=String(url);options=init;return new Response('<html></html>');};
- try{
-  const response:any=await new Promise(resolve=>listener({operation:'product',market:'amazon.com',asin},{url:'https://creative-raadar.vercel.app/',frameId:0,tab:{id:8}},resolve));
-  assert.equal(response.html,'<html></html>');assert.equal(options.credentials,'omit');assert.equal(options.redirect,'error');assert(called.endsWith(asin));
-  assert.equal(listener({operation:'product',market:'amazon.com',asin},{url:'https://evil.test/',frameId:0,tab:{id:8}},()=>{throw Error('must not respond');}),false);
- }finally{globalThis.fetch=original;}
+ assert.equal(ready.browserNavigation,true);
+ assert.equal(listener({operation:'product',market:'amazon.com',asin},{url:'https://evil.test/',frameId:0,tab:{id:8}},()=>{throw Error('must not respond');}),false);
+
 });
 test('40 requested videos continue onto page two instead of stopping after 20 products',async()=>{
  const pages:string[]=[];let inspected=0;const events:any[]=[];

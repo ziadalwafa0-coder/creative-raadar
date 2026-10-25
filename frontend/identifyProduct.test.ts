@@ -15,7 +15,6 @@ test('matching titles cannot approve different pictures and never change iron in
  assert.deepEqual(queries,['Portable Iron','Portable Iron']);assert.equal(compared,2);assert.equal(result.products.length,0);
 });
 test('unreadable images fail closed instead of falling back to a title match',async()=>{
- const result=await findIdentityCandidates(new Blob(),identity,'amazon.com',new AbortController().signal,()=>{},{request:async(_op,p)=>({html:html('B00000000'+p.page)}),loadImage:async()=>{throw Error('CORS');},compare:async()=>{throw Error('must not run');}});
- assert.equal(result.products.length,0);
+ await assert.rejects(findIdentityCandidates(new Blob(),identity,'amazon.com',new AbortController().signal,()=>{},{request:async(_op,p)=>({html:html('B00000000'+p.page)}),loadImage:async()=>{throw Error('CORS');},compare:async()=>{throw Error('must not run');}}),/تعذر قراءة صورها/);
  await assert.rejects(loadAmazonImage('https://evil.test/image.jpg',new AbortController().signal));
 });
