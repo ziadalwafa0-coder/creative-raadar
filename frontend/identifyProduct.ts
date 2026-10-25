@@ -4,10 +4,11 @@ import {scoreProductImage} from './productVision';
 import type {Marketplace,ProductHit} from '../backend/src/types';
 export type IdentityProposal={query:string;family:ProductFamily;conflict:boolean;uncertain:boolean;alternatives:string[];products:BrowserProduct[]};
 export async function identifyProduct(image:Blob,englishHint:string,market:Marketplace,signal:AbortSignal,progress:(text:string)=>void,onIdentity?:(proposal:IdentityProposal)=>void):Promise<IdentityProposal>{
- const scores=canonicalScores(await scoreProductImage(image,visualLabels,signal,progress));signal.throwIfAborted();
+ const labels=[...new Set([...visualLabels,englishHint])];
+ const scores=canonicalScores(await scoreProductImage(image,labels,signal,progress));signal.throwIfAborted();
  const identity=chooseVisualIdentity(scores,englishHint);
  if(identity.family==='other')throw Error('الصورة لا تطابق نوعًا معروفًا بدرجة كافية. اكتب نوع المنتج بالتحديد أو جرّب صورة واضحة بخلفية بسيطة.');
- if(identity.conflict&&productFamilies.some(f=>f[2].test(englishHint)))identity.alternatives=[englishHint,...identity.alternatives].slice(0,4);
+ if(identity.conflict)identity.alternatives=[englishHint,...identity.alternatives].slice(0,4);
  onIdentity?.({...identity,products:[]});
  return findIdentityCandidates(image,identity,market,signal,progress);
 }

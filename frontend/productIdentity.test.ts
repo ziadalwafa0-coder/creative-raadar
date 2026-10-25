@@ -22,3 +22,9 @@ test('visual ranking can only reorder actual current Amazon hits; no invented AS
  const hits=[{asin:'B000000001',title:'A',url:'https://www.amazon.com/dp/B000000001',ratingsCount:100},{asin:'B000000002',title:'B',url:'https://www.amazon.com/dp/B000000002',ratingsCount:20}];
  assert.deepEqual(rankProducts(hits,[{label:'fake',score:1},{label:'B',score:0.9}]).map(p=>p.asin),['B000000002','B000000001']);
 });
+test('unlisted product families can be compared against the supplied English name without accepting unrelated listings',()=>{
+ const identity=chooseVisualIdentity([{label:'Micro Mini 1080p Camera',score:0.7},{label:'Rechargeable LED Lamp',score:0.1}],'Micro Mini 1080p Camera');
+ assert.equal(identity.family,'custom');assert.equal(identity.query,'Micro Mini 1080p Camera');
+ assert(matchesIdentity('Mini Camera 1080p','Micro Mini 1080p Camera',identity.family));
+ assert(!matchesIdentity('Mini LED Lamp','Micro Mini 1080p Camera',identity.family));
+});

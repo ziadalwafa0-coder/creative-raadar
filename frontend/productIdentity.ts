@@ -34,6 +34,7 @@ export const productFamilies=[
  ['light','Rechargeable LED Lamp',/lamp|light/i],
  ['iron','Handheld Garment Steamer',/steamer/i],
  ['scale','Digital Kitchen Scale',/scale/i],
+ ['custom','Product described by the supplied name',/$a/],
  ['other','A different object, unrelated to household products',/$a/],
 ] as const;
 export type ProductFamily=typeof productFamilies[number][0];
@@ -53,21 +54,28 @@ const descriptions:Partial<Record<ProductFamily,string>>={
  fan:'an electric fan with propeller blades inside a circular safety grille',
  vacuum:'a handheld car vacuum cleaner with a suction nozzle and a dust container',
 };
-export const visualLabels=productFamilies.map(f=>descriptions[f[0]]||f[1]);
-export function canonicalScores(scores:VisualScore[]):VisualScore[]{return scores.map(s=>({...s,label:productFamilies[visualLabels.indexOf(s.label)]?.[1]||s.label}));}
+const visualFamilies=productFamilies.filter(f=>f[0]!=='custom');
+export const visualLabels=visualFamilies.map(f=>descriptions[f[0]]||f[1]);
+export function canonicalScores(scores:VisualScore[]):VisualScore[]{return scores.map(s=>({...s,label:visualFamilies[visualLabels.indexOf(s.label)]?.[1]||s.label}));}
 export function familyFor(id:string){return productFamilies.find(f=>f[0]===id);}
 export function chooseVisualIdentity(scores:VisualScore[],englishHint:string){
- const ranked=scores.filter(s=>Number.isFinite(s.score)&&s.score>=0&&productFamilies.some(f=>f[1]===s.label)).sort((a,b)=>b.score-a.score);
+ const ranked=scores.filter(s=>Number.isFinite(s.score)&&s.score>=0&&(s.label===englishHint||productFamilies.some(f=>f[1]===s.label))).sort((a,b)=>b.score-a.score);
  const first=ranked[0];if(!first)throw Error('لم يمكن فهم الصورة؛ جرّب صورة أوضح للمنتج');
- const family=productFamilies.find(f=>f[1]===first.label)!;
- const agrees=family[2].test(englishHint);
+ const family=productFamilies.find(f=>f[1]===first.label)||productFamilies.find(f=>f[2].test(englishHint))||familyFor('custom')!;
+ const agrees=first.label===englishHint||family[2].test(englishHint);
  const uncertain=family[0]==='other'||first.score<0.28||first.score-(ranked[1]?.score||0)<0.08;
  return {family:family[0],query:agrees?englishHint:family[1],conflict:!agrees,uncertain,
   alternatives:ranked.filter(s=>s.label!==productFamilies.at(-1)![1]).slice(0,3).map(s=>s.label)};
 }
 /** Never let an explicit conflicting tier count leak into the collected media. Missing tiers are allowed. */
 export function matchesIdentity(title:string,query:string,family:ProductFamily){
- const category=familyFor(family);if(!category||family==='other'||!category[2].test(title))return false;
+ const category=familyFor(family);if(!category||family==='other')return false;
+ if(family==='custom'){
+  // Unknown families must still share meaningful terms with the current approved name.
+  const words=[...new Set((query.toLowerCase().match(/[a-z]+/g)||[]).filter(w=>w.length>2&&!/^(the|and|with|for|new|mini|micro|portable|electric|rechargeable|wireless|cordless|inch|black|white|pack|pcs)$/.test(w)))];
+  const titleWords=new Set(title.toLowerCase().match(/[a-z]+/g)||[]);
+  if(!words.length||words.filter(w=>titleWords.has(w)).length<Math.min(2,words.length))return false;
+ }else if(!category[2].test(title))return false;
  const wanted=query.match(/\b(\d+)\s*[- ]?tier\b/i)?.[1];
  const actual=title.match(/\b(\d+)\s*[- ]?tier\b/i)?.[1];
  if(wanted&&actual&&wanted!==actual)return false;

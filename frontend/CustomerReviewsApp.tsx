@@ -64,7 +64,7 @@ export function CustomerReviewsApp({api}:{api:string}){
  };
  const refineIdentity=async(nextQuery:string)=>{
   if(!proposal||!imageFile.current)return;
-  const previous=proposal;const family=productFamilies.find(f=>f[2].test(nextQuery));if(!family)return;
+  const previous=proposal;const family=productFamilies.find(f=>f[2].test(nextQuery))||productFamilies.find(f=>f[0]==='custom')!;
   clear();const run=session.current.start();setRunning(true);
   setProposal({...previous,query:nextQuery,family:family[0],products:[]});setIdentityQuery(nextQuery);setTranslatedQuery(nextQuery);
   try{
