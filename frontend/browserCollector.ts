@@ -3,6 +3,7 @@ import {parseCustomerVideoBlocks} from '../backend/src/parser';
 import {parseRatingsCount,isAmazonErrorPage} from '../backend/src/utils';
 import {safeMediaUrl} from '../backend/src/utils';
 export interface ReviewImage {url:string;sourceAsin:string;sourceUrl:string;title:string}
+export type BrowserProduct=ProductHit&{imageUrl?:string};
 export type BrowserEvent=SearchEvent|{id:string;type:'image';image:ReviewImage};
 export interface MediaLimits {videos:number;images:number}
 
@@ -30,13 +31,14 @@ export function readAmazonDocument(html:string):Document{
  if(doc.querySelector('form[name="signIn"]'))throw new SourceError('LOGIN_WALL','أمازون طلب تسجيل الدخول؛ الجلب المجاني يقرأ الصفحات العامة فقط');
  return doc;
 }
-export function readBrowserProducts(doc:Document,market:Marketplace):ProductHit[]{
- const hits:ProductHit[]=[];
+export function readBrowserProducts(doc:Document,market:Marketplace):BrowserProduct[]{
+ const hits:BrowserProduct[]=[];
  for(const row of doc.querySelectorAll('[data-component-type="s-search-result"][data-asin]')){
   const asin=row.getAttribute('data-asin')||'';const title=row.querySelector('h2')?.textContent?.trim()||row.querySelector('img.s-image')?.getAttribute('alt')||'';
   if(!/^[A-Z0-9]{10}$/.test(asin)||!title)continue;
   const count=row.querySelector('a[aria-label*="ratings"], a[aria-label*="تقييم"]')?.getAttribute('aria-label')||row.querySelector('.s-underline-text')?.textContent;
-  hits.push({asin,title,ratingsCount:parseRatingsCount(count),url:`https://${markets[market].host}/dp/${asin}`});if(hits.length===20)break;
+  const image=row.querySelector('img.s-image')?.getAttribute('src')||'';
+  hits.push({asin,title,ratingsCount:parseRatingsCount(count),url:`https://${markets[market].host}/dp/${asin}`,...(safeMediaUrl(image)?{imageUrl:image}:{})});if(hits.length===20)break;
  }
  if(!hits.length&&!/No results for|لم نعثر|لا توجد نتائج/i.test(doc.body.textContent||''))throw new SourceError('PARSE_EMPTY','لم تظهر نتائج منتجات قابلة للقراءة');
  return [...new Map(hits.map(h=>[h.asin,h])).values()].sort((a,b)=>b.ratingsCount-a.ratingsCount);
@@ -53,7 +55,7 @@ export function readCustomerImages(doc:Document,asin:string,market:Marketplace):
  }
  return found;
 }
-export async function searchInBrowser(query:string,market:Marketplace,id:string,signal:AbortSignal,emit:(event:BrowserEvent)=>void,request=browserRequest,requested:MediaLimits={videos:50,images:0}){
+export async function searchInBrowser(query:string,market:Marketplace,id:string,signal:AbortSignal,emit:(event:BrowserEvent)=>void,request=browserRequest,requested:MediaLimits={videos:50,images:0},acceptProduct?:(product:ProductHit)=>boolean,preferredAsin?:string){
  const limits={videos:Math.max(0,Math.min(50,Math.floor(requested.videos)||0)),images:Math.max(0,Math.min(50,Math.floor(requested.images)||0))};
  if(!limits.videos&&!limits.images)throw Error('حدد عدد فيديوهات أو صور أكبر من صفر');
  const capability=await request('ping',{},signal,1500);signal.throwIfAborted();
@@ -63,8 +65,11 @@ export async function searchInBrowser(query:string,market:Marketplace,id:string,
   const result=await request('search',{query,market,page:String(page)},signal);signal.throwIfAborted();
   if(result.page!==undefined&&result.page!==page)throw Error('أعد تحميل الإضافة والصفحة لتفعيل الانتقال الصحيح بين صفحات البحث');
   const {html}=result;
-  const products=readBrowserProducts(readAmazonDocument(html),market).filter(product=>!visited.has(product.asin));
-  if(!products.length)break;
+  const pageProducts=readBrowserProducts(readAmazonDocument(html),market).filter(product=>!visited.has(product.asin));
+  if(!pageProducts.length)break;
+  const products=pageProducts.filter(product=>!acceptProduct||acceptProduct(product));
+  products.sort((a,b)=>Number(b.asin===preferredAsin)-Number(a.asin===preferredAsin));
+  for(const product of pageProducts)if(!products.includes(product))visited.add(product.asin);
   const total=visited.size+products.length;
   for(let index=0;index<products.length&&(seen.size<limits.videos||seenImages.size<limits.images);index++){
   signal.throwIfAborted();const product=products[index];visited.add(product.asin);emit({id,type:'progress',index:visited.size,total,asin:product.asin});

@@ -11,6 +11,16 @@ test('browser parser sorts actual search-card counts and recognizes error-image 
  assert.deepEqual(readBrowserProducts(readAmazonDocument(searchHtml),'amazon.com').map(h=>h.asin),[other,asin]);
  assert.throws(()=>readAmazonDocument('<html><head><title>Sorry! Something went wrong!</title></head><body></body></html>'),/رفض الطلب/);
 });
+test('visual identity filters wrong products and continues if an entire search page is unrelated',async()=>{
+ const events:any[]=[];const inspected:string[]=[];const pages:string[]=[];
+ const request=async(operation:string,payload:any)=>{
+  if(operation==='ping')return{pagination:true};
+  if(operation==='search'){pages.push(payload.page);return{page:Number(payload.page),html:payload.page==='1'?searchHtml:payload.page==='2'?searchHtml.replaceAll(asin,'B000000003').replaceAll(other,'B000000004').replace('Rack one','9 Tier Shoe Rack with Cover'): '<html><body>No results for this</body></html>'};}
+  inspected.push(payload.asin);return{html:productHtml(payload.asin,[{creatorType:'customer',productAsin:payload.asin,videoURL:media(1)}])};
+ };
+ await searchInBrowser('9 Tier Shoe Rack with Cover','amazon.com','identity',new AbortController().signal,e=>events.push(e),request,{videos:1,images:0},p=>p.title.includes('9 Tier'));
+ assert.deepEqual(pages,['1','2']);assert.deepEqual(inspected,['B000000003']);assert.equal(events.filter(e=>e.type==='video').length,1);
+});
 test('browser pipeline filters seller and wrong product, deduplicates and caps at 50',async()=>{
  const events:any[]=[];const calls:string[]=[];
  const request=async(operation:string,payload:any)=>{calls.push(operation);if(operation==='ping')return{ready:true};if(operation==='search')return{html:searchHtml};

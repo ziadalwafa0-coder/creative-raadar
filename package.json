@@ -10,7 +10,7 @@
     "dev:frontend": "vite --host 127.0.0.1",
     "build": "npm run build:extension && vite build",
     "build:extension": "node scripts/package-extension.mjs",
-    "test:browser": "tsx --test frontend/browserCollector.test.ts frontend/translateProduct.test.ts frontend/amazonProductName.test.ts",
+    "test:browser": "tsx --test frontend/browserCollector.test.ts frontend/translateProduct.test.ts frontend/amazonProductName.test.ts frontend/productIdentity.test.ts frontend/productVision.test.ts",
     "preview": "vite preview",
     "test": "tsx --test src/**/*.test.ts",
     "test:isolation": "tsx --test src/server/productIsolation.test.ts src/utils/rules.test.ts",
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
+    "@huggingface/transformers": "^3.8.1",
     "@tailwindcss/vite": "^4.3.3",
     "@vercel/blob": "2.8.2",
     "@vitejs/plugin-react": "^6.1.1",
