@@ -101,3 +101,12 @@ This section supersedes the image-to-title/category proposal behavior described 
 - Real model CPU smoke: four supplied product images each matched themselves and rejected all six cross-product pairs. Real Chrome/WASM worker: same shoe-rack image cosine 1 / structure 1 -> accepted; clothes-rack image cosine 0.771 / structure 0.578 -> rejected. This was an explicitly local model harness, not an Amazon collection claim.
 - A live Amazon product page returned a Continue Shopping access wall. No challenge was clicked or bypassed and no further live Amazon collection was attempted in this run. Therefore a new exact-match-to-live-review end-to-end run is not claimed. The last successful live collection belongs to the earlier version below.
 
+# 503 recovery and explicit open-page reader — 2026-10-25
+
+- Extension 1.2.2 retains the existing four Amazon host permissions and adds no cookies/tabs/storage/scripting permissions. Existing host permissions allow listing matching product tabs and messaging the new declarative Amazon content reader (Chrome Tabs API documentation).
+- 403/429/503 stops automatic fetching, blocks subsequent queued requests for at least 60 seconds and honors a longer Retry-After. There is no automatic retry, proxy/market fallback, tab navigation, CAPTCHA clicking or challenge solving.
+- The user can explicitly select an already-open, normally rendered Amazon product page. The reader transfers a minimized product/review snapshot, not full account DOM, forms, scripts or cookies. Sign-in, challenge and mismatched-variant pages are refused. The selected ASIN/market are checked again by worker and frontend; only that product's customer media is parsed.
+- Manual selection is prominently labeled as manual, without claiming image matching. Opening the customer review/video section may be necessary to load public media before reading. Nothing is persisted.
+- Local controlled checks: 31 extension/frontend tests and 12 backend tests passed, along with TypeScript and build. Tests cover public-only snapshot minimization, no credential reads, challenge refusal, ASIN binding, 503 cooldown and a read operation that makes zero network fetch calls.
+- Updated the known unpacked folder `C:/Users/Al Asdikaa/Documents/Codex/Creative-Radaar-Chrome-1.2.1` to manifest/worker 1.2.2. After the user's first Reload, actual Chrome still responded with 1.2.1 and did not answer the new reader operation. The installed folder path was requested to resolve this mismatch. A real Chrome customer-review import with 1.2.2 is not yet claimed.
+

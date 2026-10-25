@@ -45,7 +45,7 @@ test('challenge stops the run instead of repeatedly hitting more products',async
  let products=0;const events:any[]=[];
  const request=async(operation:string)=>{if(operation==='ping')return{};if(operation==='search')return{html:searchHtml};products++;return{html:'<html><body>Robot Check</body></html>'};};
  await searchInBrowser('clothes rack','amazon.com','run',new AbortController().signal,e=>events.push(e),request);
- assert.equal(products,1);assert(events.some(e=>e.code===undefined&&e.type==='warn'&&e.reason.includes('تحقق')));assert.equal(events.at(-1).count,0);
+ assert.equal(products,1);assert(events.some(e=>e.code==='CAPTCHA'&&e.type==='warn'&&e.reason.includes('تحقق')));assert.equal(events.at(-1).count,0);
 });
 test('extension worker only permits fixed public Amazon operations and omits credentials',async()=>{
  let listener:any;let options:any;let called='';
@@ -55,7 +55,7 @@ test('extension worker only permits fixed public Amazon operations and omits cre
  assert.throws(()=>requestUrl({operation:'product',market:'amazon.com',asin:'../../ap/signin'}));
  assert.equal(requestUrl({operation:'product',market:'amazon.com',asin}),`https://www.amazon.com/dp/${asin}`);
  const ready:any=await new Promise(resolve=>listener({operation:'ping'},{url:'https://creative-raadar.vercel.app/',frameId:0,tab:{id:8}},resolve));
- assert.equal(ready.protocol,2);assert.equal(ready.version,'1.2.1');assert.equal(ready.pagination,true);
+ assert.equal(ready.protocol,2);assert.equal(ready.version,'1.2.2');assert.equal(ready.pagination,true);
  assert(requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'2'}).endsWith('&page=2'));
  assert.throws(()=>requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'99'}));
  const original=globalThis.fetch;globalThis.fetch=async(url:any,init:any)=>{called=String(url);options=init;return new Response('<html></html>');};

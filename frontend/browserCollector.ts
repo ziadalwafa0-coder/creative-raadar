@@ -61,10 +61,16 @@ export async function collectApprovedProduct(product:BrowserProduct,market:Marke
  if(!/^[A-Z0-9]{10}$/.test(product.asin))throw Error('معرّف منتج غير صحيح');
  signal.throwIfAborted();emit({id,type:'progress',index:1,total:1,asin:product.asin});
  const {html}=await request('product',{asin:product.asin,market},signal);signal.throwIfAborted();
+ return collectProductDocument(html,product.asin,market,id,signal,emit,requested);
+}
+export function collectProductDocument(html:string,asin:string,market:Marketplace,id:string,signal:AbortSignal,emit:(event:BrowserEvent)=>void,requested:MediaLimits){
+ if(!/^[A-Z0-9]{10}$/.test(asin)||!(market in markets))throw Error('بيانات منتج غير صحيحة');
+ if(Object.values(requested).some(n=>!Number.isInteger(n)||n<0||n>50)||!requested.videos&&!requested.images)throw Error('حدد عددًا صحيحًا من 1 إلى 50 لكل نوع مطلوب');
+ signal.throwIfAborted();
  const doc=readAmazonDocument(html);
  const blocks=Array.from(doc.querySelectorAll('[data-video-items]'),n=>n.getAttribute('data-video-items')||'');
- const videos=parseCustomerVideoBlocks(blocks,product.asin,market);
- const images=readCustomerImages(doc,product.asin,market);
+ const videos=parseCustomerVideoBlocks(blocks,asin,market);
+ const images=readCustomerImages(doc,asin,market);
  const seen=new Set<string>();let count=0,photos=0;
  for(const video of videos){if(count>=requested.videos)break;if(seen.has(video.url))continue;seen.add(video.url);count++;emit({id,type:'video',video});}
  seen.clear();for(const image of images){if(photos>=requested.images)break;if(seen.has(image.url))continue;seen.add(image.url);photos++;emit({id,type:'image',image});}
@@ -97,7 +103,7 @@ export async function searchInBrowser(query:string,market:Marketplace,id:string,
    if(!videos.length&&!images.length&&!doc.querySelector('#customer-reviews_feature_div,#localTopReviews,#localTopReviewsList'))throw Error('قسم مراجعات العملاء لم يظهر لهذا المنتج');
    for(const video of videos){if(seen.size>=limits.videos)break;if(seen.has(video.url))continue;seen.add(video.url);emit({id,type:'video',video});}
    for(const image of images){if(seenImages.size>=limits.images)break;if(seenImages.has(image.url))continue;seenImages.add(image.url);emit({id,type:'image',image});}
-  }catch(error){signal.throwIfAborted();emit({id,type:'warn',reason:error instanceof Error?error.message:'تعذر فحص المنتج'});if(error instanceof SourceError&&['CAPTCHA','BLOCKED','LOGIN_WALL'].includes(error.code)){blocked=true;break;}}
+  }catch(error){signal.throwIfAborted();emit({id,type:'warn',reason:error instanceof Error?error.message:'تعذر فحص المنتج',code:error instanceof SourceError?error.code:undefined});if(error instanceof SourceError&&['CAPTCHA','BLOCKED','LOGIN_WALL'].includes(error.code)){blocked=true;break;}}
   }
  }
  signal.throwIfAborted();emit({id,done:true,count:seen.size});
