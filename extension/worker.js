@@ -1,4 +1,4 @@
-const VERSION='1.3.0';
+const VERSION='1.3.1';
 const origins=new Set(['https://creative-raadar.vercel.app','http://127.0.0.1:5173','http://localhost:5173']);
 const markets=new Set(['amazon.com','amazon.eg','amazon.sa','amazon.ae']);
 const workspaces=new Map();
@@ -40,31 +40,12 @@ function until(promise,signal,ms=10000){return new Promise((resolve,reject)=>{
  signal.addEventListener('abort',abort,{once:true});if(signal.aborted){abort();return;}
  promise.then(value=>done(resolve,value),reason=>done(reject,reason));
 });}
-async function loaded(tabId,url,signal){
- const current=await chrome.tabs.get(tabId);
- if(current.status==='complete'&&samePage(current.url,url))return;
- await new Promise((resolve,reject)=>{
-  const clean=()=>{clearTimeout(timer);chrome.tabs.onUpdated.removeListener(update);signal.removeEventListener('abort',abort);};
-  const abort=()=>{clean();reject(error('تم إيقاف البحث'));};
-  const update=(id,change,tab)=>{
-   if(id!==tabId)return;
-   if(change.status==='complete'){
-    clean();samePage(tab.url,url)?resolve():reject(error('أمازون انتقل لصفحة مختلفة؛ توقفت القراءة دون اعتماد نتائج','BLOCKED'));
-   }
-  };
-  const timer=setTimeout(()=>{clean();reject(error('صفحة أمازون لم تكتمل؛ راجع التبويب الظاهر'));},30000);
-  chrome.tabs.onUpdated.addListener(update);signal.addEventListener('abort',abort,{once:true});
-  // Close the check/listener race without reloading the page.
-  chrome.tabs.get(tabId).then(t=>{if(t.status==='complete')update(tabId,{status:'complete'},t);}).catch(abort);
-  if(signal.aborted)abort();
- });
-}
 async function readRendered(tabId,operation,signal,url){
  const before=await chrome.tabs.get(tabId);if(!samePage(before.url,url))throw error('تغير تبويب المصدر؛ لم نقرأ الصفحة المختلفة','BLOCKED');
  let response;
  // A content script may register just after tabs.onUpdated. Message retry only; no navigation retry.
  for(let i=0;i<2;i++){
-  try{response=await until(chrome.tabs.sendMessage(tabId,{operation:operation==='search'?'cr-read-search':'cr-read-open-product'},{frameId:0}),signal,10000);break;}
+  try{response=await until(chrome.tabs.sendMessage(tabId,{operation:operation==='search'?'cr-read-search':'cr-read-open-product'},{frameId:0}),signal,20000);break;}
   catch(e){signal.throwIfAborted();if(i||!/receiving end|establish connection/i.test(String(e?.message)))throw e;await pause(300,signal);}
  }
  if(response?.error)throw error(response.error,response.code||'PARSE_EMPTY');
@@ -73,29 +54,25 @@ async function readRendered(tabId,operation,signal,url){
  if(typeof response.html!=='string'||response.html.length>4*1024*1024)throw error('بيانات المصدر غير صالحة');
  return response;
 }
-async function navigateAndRead(owner,workspace,message,signal){
+async function fetchPublic(owner,workspace,message,signal){
  const url=requestUrl(message);signal.throwIfAborted();
  const gap=Math.max(0,nextNavigation-Date.now());if(gap)await pause(gap,signal);
- signal.throwIfAborted();
- if(workspaces.get(owner)!==workspace||workspace.closed)throw error('أُغلق تبويب العمل أو بدأ بحث جديد');
- if(workspace.blocked)throw error('أمازون أوقف هذا البحث. راجع تبويبه بنفسك؛ لن نحاول تحميل صفحة أخرى تلقائيًا','BLOCKED');
- let source;
- if(workspace.tabId!==undefined){
-  source=await chrome.tabs.get(workspace.tabId).catch(()=>null);
-  if(!source){workspace.closed=true;throw error('أُغلق تبويب أمازون؛ ابدأ بحثًا جديدًا عند الرغبة');}
-  if(workspace.url&&!samePage(source.url,workspace.url)){workspace.closed=true;throw error('تغير تبويب العمل يدويًا؛ لم نستخدمه لمنتج آخر');}
- }
+ if(workspaces.get(owner)!==workspace||workspace.closed)throw error('بدأ بحث جديد أو تم إيقاف البحث');
+ if(workspace.blocked)throw error('أمازون رفض هذا البحث؛ توقف الجلب','BLOCKED');
  nextNavigation=Date.now()+2200;
- workspace.url=url;
- if(!source){source=await chrome.tabs.create({url,active:true});workspace.tabId=source.id;}
- else await chrome.tabs.update(source.id,{url,...(source.frozen||source.discarded?{active:true}:{})});
- signal.throwIfAborted();await loaded(source.id,url,signal);signal.throwIfAborted();
- const result=await readRendered(source.id,message.operation,signal,url);signal.throwIfAborted();
+ const response=await fetch(url,{credentials:'omit',redirect:'error',cache:'no-store',signal:AbortSignal.any([signal,AbortSignal.timeout(25000)])});
+ if([403,429,503].includes(response.status))throw error('أمازون رفض الجلب المباشر بدون تبويب ('+response.status+'). لم نفتح أي تبويب ولم نغيّر طريقة الوصول.','BLOCKED');
+ if(!response.ok)throw error('تعذر قراءة صفحة أمازون ('+response.status+')');
+ if(!samePage(response.url,url))throw error('رابط المصدر لا يطابق البحث المطلوب','BLOCKED');
+ if(!/text\/html/i.test(response.headers.get('content-type')||''))throw error('أمازون لم يرجع صفحة قابلة للقراءة');
+ const reader=response.body?.getReader();if(!reader)throw error('استجابة فارغة');
+ const chunks=[];let size=0;try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>6*1024*1024)throw error('الصفحة أكبر من الحد المسموح');chunks.push(value);}}finally{await reader.cancel().catch(()=>{});}
+ const html=await new Blob(chunks).text();signal.throwIfAborted();
+ if(/validateCaptcha|captchacharacters|Click the button below to continue shopping/i.test(html))throw error('أمازون طلب تحققًا بشريًا؛ توقف الجلب المباشر','CAPTCHA');
+ if(/<title[^>]*>[^<]*(?:Sorry! Something went wrong|Service Unavailable|Robot Check)/i.test(html))throw error('أمازون رفض الصفحة؛ توقف البحث','BLOCKED');
+ if(/<form[^>]+name=["']signIn["']/i.test(html))throw error('أمازون طلب تسجيل الدخول؛ توقف الجلب','LOGIN_WALL');
  if(workspaces.get(owner)!==workspace)throw error('وصل رد لبحث قديم');
- // Return to the app only if our work tab still has focus; never interrupt an unrelated user tab.
- const current=await chrome.tabs.get(source.id);
- if(current.active)await chrome.tabs.update(owner,{active:true}).catch(()=>{});
- return {...result,page:message.operation==='search'?Number(message.page||1):undefined,transport:'tab'};
+ return{html,market:message.market,asin:message.asin,page:message.operation==='search'?Number(message.page||1):undefined,transport:'http'};
 }
 chrome.tabs?.onRemoved?.addListener(tabId=>{
  for(const [owner,w] of workspaces){if(owner===tabId){w.controller?.abort();workspaces.delete(owner);}else if(w.tabId===tabId){w.closed=true;w.tabId=undefined;w.controller?.abort();}}
@@ -104,14 +81,12 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
  let origin;try{origin=new URL(sender.url).origin;}catch{return false;}
  if(!origins.has(origin)||sender.frameId!==0||!Number.isInteger(sender.tab?.id))return false;
  const owner=sender.tab.id;
- if(message.operation==='ping'){respond({ready:true,protocol:2,version:VERSION,pagination:true,openPageReader:true,browserNavigation:true});return false;}
+ if(message.operation==='ping'){respond({ready:true,protocol:2,version:VERSION,pagination:true,openPageReader:true,browserNavigation:false,directFetch:true,reviewReveal:true});return false;}
  if(message.operation==='begin_browser'){
   if(typeof message.jobId!=='string'||message.jobId.length>100){respond({protocol:2,error:'معرّف بحث غير صالح'});return false;}
   const old=workspaces.get(owner);old?.controller?.abort();
-  // Do not automatically navigate away from an Amazon refusal/challenge.
-  if(old?.blocked){respond({protocol:2,error:'أمازون طلب مراجعة الصفحة. استخدم التبويب الظاهر أو القراءة اليدوية؛ لا توجد محاولة آلية بعد الرفض.',code:'BLOCKED'});return false;}
   workspaces.set(owner,{jobId:message.jobId,tabId:old?.tabId,url:old?.url,closed:false});
-  respond({protocol:2,ok:true,transport:'tab'});return false;
+  respond({protocol:2,ok:true,transport:'http'});return false;
  }
  if(message.operation==='stop_browser'){
   const w=workspaces.get(owner);if(w?.jobId===message.jobId){w.controller?.abort();w.closed=true;}
@@ -144,11 +119,11 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
  if(!['search','product'].includes(message.operation))return false;
  let url;try{url=requestUrl(message);}catch(e){respond({protocol:2,error:e.message});return false;}
  const workspace=workspaces.get(owner);
- if(!workspace||workspace.jobId!==message.jobId||message.transport!=='tab'){respond({protocol:2,transport:'tab',error:'ابدأ بحثًا جديدًا لتفعيل القراءة من Chrome'});return false;}
+ if(!workspace||workspace.jobId!==message.jobId||message.transport!=='http'){respond({protocol:2,transport:'http',error:'ابدأ بحثًا جديدًا لتفعيل القراءة من Chrome'});return false;}
  workspace.controller?.abort();const controller=new AbortController();workspace.controller=controller;workspace.requestId=message.id;
- const task=queue.then(()=>navigateAndRead(owner,workspace,message,controller.signal));queue=task.catch(()=>{});
+ const task=queue.then(()=>fetchPublic(owner,workspace,message,controller.signal));queue=task.catch(()=>{});
  void task.then(result=>respond({protocol:2,...result}),e=>{
   if(['BLOCKED','CAPTCHA','LOGIN_WALL'].includes(e?.code))workspace.blocked=true;
-  respond({protocol:2,transport:'tab',error:controller.signal.aborted?'تم إيقاف البحث':e?.message||'تعذرت قراءة تبويب أمازون',code:e?.code||'NETWORK'});
+  respond({protocol:2,transport:'http',error:controller.signal.aborted?'تم إيقاف البحث':e?.message||'تعذرت قراءة تبويب أمازون',code:e?.code||'NETWORK'});
  });return true;
 });

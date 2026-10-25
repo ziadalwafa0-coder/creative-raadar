@@ -7,10 +7,13 @@ import {parseCustomerVideoBlocks} from '../backend/src/parser';
 const reader=fs.readFileSync(new URL('./amazon-reader.js',import.meta.url),'utf8');
 const worker=fs.readFileSync(new URL('./worker.js',import.meta.url),'utf8').replaceAll('export ','');
 const asin='B000000001';
-function read(body:string,sender='own',operation='cr-read-open-product',url=`https://www.amazon.com/dp/${asin}`){
+function read(body:string,sender='own',operation='cr-read-open-product',url=`https://www.amazon.com/dp/${asin}`,reveal?:'scroll'|'tab'){
  const {document,window}=parseHTML('<html><body>'+body+'</body></html>');let handler:any;let result:any;
  Object.defineProperty(document,'cookie',{get(){throw Error('cookies must not be read');}});
- vm.runInNewContext(reader,{document,MutationObserver:window.MutationObserver,setTimeout,clearTimeout,location:new URL(url),URL,chrome:{runtime:{id:'own',onMessage:{addListener(fn:any){handler=fn;}}}}});
+ const show=()=>document.querySelector('#customer-reviews_feature_div')!.setAttribute('data-video-items',JSON.stringify([{creatorType:'customer',productAsin:asin,videoURL:'https://m.media-amazon.com/revealed.mp4'}]));
+ if(reveal==='scroll')(document.querySelector('#customer-reviews_feature_div') as any).scrollIntoView=show;
+ if(reveal==='tab')document.querySelector('button')!.addEventListener('click',show);
+ vm.runInNewContext(reader,{document,...(reveal?{window:{innerHeight:600,scrollBy(){}}}:{}),MutationObserver:window.MutationObserver,setTimeout:reveal?((fn:any,_ms:any)=>setTimeout(fn,1)):setTimeout,clearTimeout,location:new URL(url),URL,chrome:{runtime:{id:'own',onMessage:{addListener(fn:any){handler=fn;}}}}});
  return new Promise<any>(resolve=>{const accepted=handler({operation},{id:sender},resolve);if(accepted===false)resolve(undefined);});
 }
 test('open-page reader exports public review fields only, not account data, forms or cookies',async()=>{
@@ -22,6 +25,13 @@ test('open-page reader exports public review fields only, not account data, form
  assert.equal(parseCustomerVideoBlocks(blocks,asin,'amazon.com').length,1);
  assert.equal(await read('<span id="productTitle">Public product</span>','another-extension'),undefined);
 });
+
+test('reader reveals lazy customer media by scrolling or a scoped Videos button',async()=>{
+ for(const reveal of ['scroll','tab'] as const){
+  const result=await read('<span id="productTitle">Product</span><div id="customer-reviews_feature_div"><div data-hook="review">Existing review</div><button>Videos</button></div>','own','cr-read-open-product',`https://www.amazon.com/dp/${asin}`,reveal);
+  assert.equal(result.diagnostics.videoItems,1);assert.equal(result.diagnostics.reviews,1);assert.equal(result.diagnostics.hasReviewsSection,true);assert.equal(result.diagnostics.scrolled,true);if(reveal==='tab')assert.equal(result.diagnostics.clickedTab,true);
+ }
+});
 test('reader refuses challenges, login pages and mismatched variants without clicking or navigating',async()=>{
  assert.equal((await read('Click the button below to continue shopping')).code,'CAPTCHA');
  assert.equal((await read('<input type="password">')).code,'LOGIN_WALL');
@@ -29,7 +39,7 @@ test('reader refuses challenges, login pages and mismatched variants without cli
 });
 test('reader adds no hosts or powerful extension permissions',()=>{
  const manifest=JSON.parse(fs.readFileSync(new URL('./manifest.json',import.meta.url),'utf8'));
- assert.equal(manifest.version,'1.3.0');assert.equal(manifest.permissions,undefined);
+ assert.equal(manifest.version,'1.3.1');assert.equal(manifest.permissions,undefined);
  assert.deepEqual(manifest.host_permissions,['https://www.amazon.com/*','https://www.amazon.eg/*','https://www.amazon.sa/*','https://www.amazon.ae/*']);
  assert(manifest.content_scripts.some((s:any)=>s.js.includes('amazon-reader.js')));
 });

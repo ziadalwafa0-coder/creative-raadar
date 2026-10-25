@@ -48,10 +48,10 @@ test('new search cancellation discards a late product response',async()=>{
 test('challenge stops the run instead of repeatedly hitting more products',async()=>{
  let products=0;const events:any[]=[];
  const request=async(operation:string)=>{if(operation==='ping')return{};if(operation==='search')return{html:searchHtml};products++;return{html:'<html><body>Robot Check</body></html>'};};
- await searchInBrowser('clothes rack','amazon.com','run',new AbortController().signal,e=>events.push(e),request);
- assert.equal(products,1);assert(events.some(e=>e.code==='CAPTCHA'&&e.type==='warn'&&e.reason.includes('تحقق')));assert.equal(events.at(-1).count,0);
+ await assert.rejects(searchInBrowser('clothes rack','amazon.com','run',new AbortController().signal,e=>events.push(e),request),/تحقق/);
+ assert.equal(products,1);assert(events.some(e=>e.code==='CAPTCHA'&&e.type==='warn'&&e.reason.includes('تحقق')));assert(!events.some(e=>e.done));
 });
-test('extension worker only permits fixed Amazon URLs and exposes the tab collector capability',async()=>{
+test('extension worker only permits fixed Amazon URLs and exposes the no-tab collector capability',async()=>{
  let listener:any;let options:any;let called='';
  Object.assign(globalThis,{chrome:{runtime:{onMessage:{addListener:(fn:any)=>{listener=fn;}}}}});
  const {requestUrl}=await import('../extension/worker.js');
@@ -59,10 +59,10 @@ test('extension worker only permits fixed Amazon URLs and exposes the tab collec
  assert.throws(()=>requestUrl({operation:'product',market:'amazon.com',asin:'../../ap/signin'}));
  assert.equal(requestUrl({operation:'product',market:'amazon.com',asin}),`https://www.amazon.com/dp/${asin}`);
  const ready:any=await new Promise(resolve=>listener({operation:'ping'},{url:'https://creative-raadar.vercel.app/',frameId:0,tab:{id:8}},resolve));
- assert.equal(ready.protocol,2);assert.equal(ready.version,'1.3.0');assert.equal(ready.pagination,true);
+ assert.equal(ready.protocol,2);assert.equal(ready.version,'1.3.1');assert.equal(ready.pagination,true);
  assert(requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'2'}).endsWith('&page=2'));
  assert.throws(()=>requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'99'}));
- assert.equal(ready.browserNavigation,true);
+ assert.equal(ready.browserNavigation,false);assert.equal(ready.directFetch,true);assert.equal(ready.reviewReveal,true);
  assert.equal(listener({operation:'product',market:'amazon.com',asin},{url:'https://evil.test/',frameId:0,tab:{id:8}},()=>{throw Error('must not respond');}),false);
 
 });
@@ -87,6 +87,18 @@ test('images-only mode returns requested photos and no videos',async()=>{
  const events:any[]=[];const request=async(operation:string,payload:any)=>operation==='ping'?{}:operation==='search'?{html:searchHtml}:{html:`<html><body><div data-hook="review">${Array.from({length:5},(_,i)=>`<img data-hook="review-image-tile" src="https://m.media-amazon.com/photo${i}.jpg">`).join('')}</div></body></html>`};
  await searchInBrowser('clothes rack','amazon.com','photos',new AbortController().signal,e=>events.push(e),request,{videos:0,images:3});
  assert.equal(events.filter(e=>e.type==='image').length,3);assert.equal(events.filter(e=>e.type==='video').length,0);
+});
+
+test('alternate queries share deduplication and visit only new products to fill the remaining count',async()=>{
+ const history={videos:new Set<string>(),images:new Set<string>(),asins:new Set<string>()};const events:any[]=[];const calls:string[]=[];
+ const request=async(operation:string,p:any)=>{
+  if(operation==='ping')return{pagination:true};
+  if(operation==='search')return{html:p.page==='2'?'<html><body>No results for this</body></html>':searchHtml.replace(other,p.query==='second'?'B000000003':other)};
+  calls.push(p.asin);return{html:productHtml(p.asin,[{creatorType:'customer',productAsin:p.asin,videoURL:media(p.asin==='B000000003'?3:p.asin===asin?1:2)}])};
+ };
+ await searchInBrowser('first','amazon.com','run',new AbortController().signal,e=>events.push(e),request,{videos:3,images:0},undefined,undefined,history);
+ await searchInBrowser('second','amazon.com','run',new AbortController().signal,e=>events.push(e),request,{videos:1,images:0},undefined,undefined,history);
+ assert.equal(events.filter(e=>e.type==='video').length,3);assert.equal(new Set(calls).size,3);assert.equal(calls.length,3);
 });
 test('old extension replies cannot win a race against the current worker protocol',async()=>{
  const oldWindow=(globalThis as any).window,oldLocation=(globalThis as any).location;
