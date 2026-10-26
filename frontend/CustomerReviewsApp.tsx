@@ -22,7 +22,12 @@ export function CustomerReviewsApp({api}:{api:string}){
  const [nameOnly,setNameOnly]=useState(false);const imageFile=useRef<File|undefined>(undefined);
  const [recovery,setRecovery]=useState(false);const [tabRecovery,setTabRecovery]=useState(false);const [extensionOutdated,setExtensionOutdated]=useState(false);
  const [loggingIn,setLoggingIn]=useState(false);const loginRequest=useRef<AbortController|null>(null);
- const expireSession=()=>{clear();sessionStorage.removeItem('cr_reviews_token');setToken('');setAuthorized(false);setError(new SessionExpired().message);};
+ const expireSession=()=>{
+  session.current.clear();for(const controller of pendingDownloads.current)controller.abort();pendingDownloads.current.clear();
+  for(const url of objectUrls.current)URL.revokeObjectURL(url);objectUrls.current.clear();setRunning(false);
+  // Keep this tab's public results in memory for reauthentication. Explicit logout/new product still clears them.
+  sessionStorage.removeItem('cr_reviews_token');setToken('');setAuthorized(false);setError(new SessionExpired().message);setStatus('سجّل بكودك لاستكمال التشغيل والتنزيل من النتائج الحالية.');
+ };
  const session=useRef(new SearchSession());const imageUrl=useRef('');const pendingDownloads=useRef(new Set<AbortController>());const objectUrls=useRef(new Set<string>());
  const clear=()=>{setRecovery(false);session.current.clear();for(const controller of pendingDownloads.current)controller.abort();pendingDownloads.current.clear();for(const url of objectUrls.current)URL.revokeObjectURL(url);objectUrls.current.clear();setVideos([]);setPhotos([]);setTranslatedQuery('');setWarnings([]);setError('');setStatus('');setRunning(false);setFailed(0);};
  useEffect(()=>{
@@ -32,7 +37,7 @@ export function CustomerReviewsApp({api}:{api:string}){
  useEffect(()=>()=>{loginRequest.current?.abort();session.current.clear();for(const controller of pendingDownloads.current)controller.abort();for(const url of objectUrls.current)URL.revokeObjectURL(url);if(imageUrl.current)URL.revokeObjectURL(imageUrl.current);},[]);
  const login=async(e:React.FormEvent)=>{
   e.preventDefault();if(loggingIn)return;const abort=new AbortController();loginRequest.current?.abort();loginRequest.current=abort;setLoggingIn(true);setError('');
-  try{const r=await timedRequest(api+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code}),signal:abort.signal});const data=await r.json().catch(()=>({}));abort.signal.throwIfAborted();if(!r.ok)throw Error(data.error||'تعذر تسجيل الدخول ('+r.status+')');if(typeof data.token!=='string'||!data.token)throw Error('استجابة الدخول غير صالحة');sessionStorage.setItem('cr_reviews_token',data.token);setToken(data.token);setAuthorized(true);setCode('');}
+  try{const r=await timedRequest(api+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code}),signal:abort.signal});const data=await r.json().catch(()=>({}));abort.signal.throwIfAborted();if(!r.ok)throw Error(data.error||'تعذر تسجيل الدخول ('+r.status+')');if(typeof data.token!=='string'||!data.token)throw Error('استجابة الدخول غير صالحة');sessionStorage.setItem('cr_reviews_token',data.token);setToken(data.token);setAuthorized(true);setCode('');if(videos.length||photos.length)setStatus('تم تجديد الجلسة؛ يمكنك استكمال التشغيل والتنزيل من النتائج الحالية.');}
   catch(e){if(!abort.signal.aborted)setError(e instanceof TypeError?'فشل الاتصال بسيرفر البحث':e instanceof Error?e.message:'فشل الاتصال');}
   finally{if(!abort.signal.aborted)setLoggingIn(false);}
  };
