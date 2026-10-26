@@ -17,8 +17,9 @@ import {searchVideos,type DebugResult} from './pipeline.ts';
 import {createAuth,validCode} from './auth.ts';
 import {openMedia,rewriteManifest} from './media.ts';
 import {safeMediaUrl} from './utils.ts';
+import {amazonQueries} from './queryAi.ts';
 
-export async function buildApp(options:{source?:VideoSource;cache?:MediaCache;logging?:boolean;auth?:ReturnType<typeof createAuth>}={}){
+export async function buildApp(options:{source?:VideoSource;cache?:MediaCache;logging?:boolean;auth?:ReturnType<typeof createAuth>;queryAi?:typeof amazonQueries}={}){
  const app=Fastify({bodyLimit:65536,trustProxy:process.env.TRUST_PROXY==='true'?(_address:string,hop:number)=>hop<1:false,logger:options.logging===false?false:{redact:['req.headers.authorization','req.headers.cookie','req.headers.x-admin-key'],serializers:{req:req=>({method:req.method,path:String(req.url).split('?')[0]})}}});
  const origins=(process.env.FRONTEND_ORIGINS||'https://creative-raadar.vercel.app,http://localhost:5173,http://127.0.0.1:5173').split(',').map(s=>s.trim());
  await app.register(cors,{origin:origins,allowedHeaders:['Content-Type','Authorization','Range','X-Admin-Key'],exposedHeaders:['Content-Range','Accept-Ranges','Content-Length'],methods:['GET','POST','OPTIONS']});
@@ -42,6 +43,13 @@ export async function buildApp(options:{source?:VideoSource;cache?:MediaCache;lo
   return {token:auth.issue('session','authorized'),authenticated:true};
  });
  app.get('/api/auth/session',async()=>({authenticated:true}));
+ app.post('/api/amazon-query',{bodyLimit:262144,config:{rateLimit:{max:20,timeWindow:'1 minute'}}},async(req,reply)=>{
+  const body=req.body as any;const name=typeof body?.name==='string'?body.name.normalize('NFKC').replace(/\s+/g,' ').trim():'';
+  const market=body?.market??'amazon.com';const thumbnail=body?.thumbnailJpegBase64;
+  if(name.length<2||name.length>300||typeof market!=='string'||!Object.hasOwn(markets,market)||thumbnail!==undefined&&(typeof thumbnail!=='string'||thumbnail.length>180000||!thumbnail.length||!/^[A-Za-z0-9+/]+={0,2}$/.test(thumbnail)||thumbnail.length%4!==0))return reply.code(400).send({error:'اسم المنتج أو الصورة أو المتجر غير صالح'});
+  try{return await (options.queryAi||amazonQueries)({name,market:market as Marketplace,thumbnailJpegBase64:thumbnail});}
+  catch(e){if((e as any)?.code==='AI_NOT_CONFIGURED')return reply.code(501).send({error:'AI_NOT_CONFIGURED'});app.log.warn({code:'AI_FAILED'},'Amazon query helper failed');return reply.code(502).send({error:'AI_FAILED'});}
+ });
  app.post('/api/auth/logout',async(req)=>{auth.revoke(bearer(req));return {authenticated:false};});
  app.get('/api/debug/:asin',async(req,reply)=>{
   const expected=process.env.ADMIN_KEY;const actual=String(req.headers['x-admin-key']||'');

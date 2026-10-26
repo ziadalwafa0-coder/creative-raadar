@@ -1,4 +1,4 @@
-const VERSION='1.3.0';
+const VERSION='1.3.2';
 const origins=new Set(['https://creative-raadar.vercel.app','http://127.0.0.1:5173','http://localhost:5173']);
 const markets=new Set(['amazon.com','amazon.eg','amazon.sa','amazon.ae']);
 const workspaces=new Map();
@@ -28,6 +28,21 @@ export function samePage(actual,expected){
  }catch{return false;}
 }
 function error(message,code='NETWORK'){return Object.assign(new Error(message),{code});}
+const marker=owner=>'creative-radaar-work='+owner;
+const owns=(url,owner)=>{try{return new URL(url).hash==='#'+marker(owner);}catch{return false;}};
+async function recoverWorkTab(owner,workspace,signal){
+ const tabs=await chrome.tabs.query({url:[...markets].map(m=>`https://www.${m}/*`)});signal.throwIfAborted();
+ const found=tabs.filter(t=>owns(t.url,owner));
+ if(found.length>1)throw error('يوجد أكثر من تبويب عمل لهذه الصفحة؛ أغلق التبويب الزائد ثم ابدأ من جديد');
+ const tab=found[0];if(!tab)return;
+ const current=new URL(tab.url);
+ if(!markets.has(current.hostname.replace(/^www\./,''))||!openedProduct(tab.url)&&!/^\/s\/?$/.test(current.pathname))throw error('تبويب العمل انتقل لصفحة أخرى؛ لم نقرأه','BLOCKED');
+ workspace.tabId=tab.id;workspace.url=tab.url;
+ await loaded(tab.id,tab.url,signal);
+ const check=await until(chrome.tabs.sendMessage(tab.id,{operation:'cr-check-public-page'},{frameId:0}),signal,5000);
+ if(check?.error)throw error(check.error,check.code||'BLOCKED');
+ if(!check?.ok||!samePage(check.url,tab.url))throw error('تعذر تأكيد صفحة العمل الحالية؛ لم ننتقل لصفحة أخرى','BLOCKED');
+}
 function pause(ms,signal){return new Promise((resolve,reject)=>{
  const abort=()=>{clearTimeout(timer);reject(error('تم إيقاف البحث'));};
  const timer=setTimeout(()=>{signal.removeEventListener('abort',abort);resolve();},ms);
@@ -64,7 +79,7 @@ async function readRendered(tabId,operation,signal,url){
  let response;
  // A content script may register just after tabs.onUpdated. Message retry only; no navigation retry.
  for(let i=0;i<2;i++){
-  try{response=await until(chrome.tabs.sendMessage(tabId,{operation:operation==='search'?'cr-read-search':'cr-read-open-product'},{frameId:0}),signal,10000);break;}
+  try{response=await until(chrome.tabs.sendMessage(tabId,{operation:operation==='search'?'cr-read-search':'cr-read-open-product'},{frameId:0}),signal,20000);break;}
   catch(e){signal.throwIfAborted();if(i||!/receiving end|establish connection/i.test(String(e?.message)))throw e;await pause(300,signal);}
  }
  if(response?.error)throw error(response.error,response.code||'PARSE_EMPTY');
@@ -79,6 +94,8 @@ async function navigateAndRead(owner,workspace,message,signal){
  signal.throwIfAborted();
  if(workspaces.get(owner)!==workspace||workspace.closed)throw error('أُغلق تبويب العمل أو بدأ بحث جديد');
  if(workspace.blocked)throw error('أمازون أوقف هذا البحث. راجع تبويبه بنفسك؛ لن نحاول تحميل صفحة أخرى تلقائيًا','BLOCKED');
+ if(workspace.tabId===undefined)await recoverWorkTab(owner,workspace,signal);
+ signal.throwIfAborted();
  let source;
  if(workspace.tabId!==undefined){
   source=await chrome.tabs.get(workspace.tabId).catch(()=>null);
@@ -86,9 +103,9 @@ async function navigateAndRead(owner,workspace,message,signal){
   if(workspace.url&&!samePage(source.url,workspace.url)){workspace.closed=true;throw error('تغير تبويب العمل يدويًا؛ لم نستخدمه لمنتج آخر');}
  }
  nextNavigation=Date.now()+2200;
- workspace.url=url;
- if(!source){source=await chrome.tabs.create({url,active:true});workspace.tabId=source.id;}
- else await chrome.tabs.update(source.id,{url,...(source.frozen||source.discarded?{active:true}:{})});
+ const target=url+'#'+marker(owner);workspace.url=target;
+ if(!source){source=await chrome.tabs.create({url:target,active:true});workspace.tabId=source.id;}
+ else await chrome.tabs.update(source.id,{url:target,...(source.frozen||source.discarded?{active:true}:{})});
  signal.throwIfAborted();await loaded(source.id,url,signal);signal.throwIfAborted();
  const result=await readRendered(source.id,message.operation,signal,url);signal.throwIfAborted();
  if(workspaces.get(owner)!==workspace)throw error('وصل رد لبحث قديم');
@@ -99,18 +116,20 @@ async function navigateAndRead(owner,workspace,message,signal){
 }
 chrome.tabs?.onRemoved?.addListener(tabId=>{
  for(const [owner,w] of workspaces){if(owner===tabId){w.controller?.abort();workspaces.delete(owner);}else if(w.tabId===tabId){w.closed=true;w.tabId=undefined;w.controller?.abort();}}
+ // Only tabs created for this app tab carry its marker; never close unrelated Amazon tabs.
+ void chrome.tabs.query({url:[...markets].map(m=>`https://www.${m}/*`)}).then(tabs=>Promise.all(tabs.filter(t=>owns(t.url,tabId)).map(t=>chrome.tabs.remove(t.id)))).catch(()=>{});
 });
 chrome.runtime.onMessage.addListener((message,sender,respond)=>{
  let origin;try{origin=new URL(sender.url).origin;}catch{return false;}
  if(!origins.has(origin)||sender.frameId!==0||!Number.isInteger(sender.tab?.id))return false;
  const owner=sender.tab.id;
- if(message.operation==='ping'){respond({ready:true,protocol:2,version:VERSION,pagination:true,openPageReader:true,browserNavigation:true});return false;}
+ if(message.operation==='ping'){respond({ready:true,protocol:2,version:VERSION,pagination:true,openPageReader:true,browserNavigation:true,directFetch:false,reviewReveal:true,tabRecovery:true});return false;}
  if(message.operation==='begin_browser'){
   if(typeof message.jobId!=='string'||message.jobId.length>100){respond({protocol:2,error:'معرّف بحث غير صالح'});return false;}
   const old=workspaces.get(owner);old?.controller?.abort();
   // Do not automatically navigate away from an Amazon refusal/challenge.
   if(old?.blocked){respond({protocol:2,error:'أمازون طلب مراجعة الصفحة. استخدم التبويب الظاهر أو القراءة اليدوية؛ لا توجد محاولة آلية بعد الرفض.',code:'BLOCKED'});return false;}
-  workspaces.set(owner,{jobId:message.jobId,tabId:old?.tabId,url:old?.url,closed:false});
+  const workspace=old||{};Object.assign(workspace,{jobId:message.jobId,closed:false,controller:undefined,requestId:undefined});workspaces.set(owner,workspace);
   respond({protocol:2,ok:true,transport:'tab'});return false;
  }
  if(message.operation==='stop_browser'){
@@ -148,7 +167,7 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
  workspace.controller?.abort();const controller=new AbortController();workspace.controller=controller;workspace.requestId=message.id;
  const task=queue.then(()=>navigateAndRead(owner,workspace,message,controller.signal));queue=task.catch(()=>{});
  void task.then(result=>respond({protocol:2,...result}),e=>{
-  if(['BLOCKED','CAPTCHA','LOGIN_WALL'].includes(e?.code))workspace.blocked=true;
+  if(workspace.jobId===message.jobId&&!controller.signal.aborted&&['BLOCKED','CAPTCHA','LOGIN_WALL'].includes(e?.code))workspace.blocked=true;
   respond({protocol:2,transport:'tab',error:controller.signal.aborted?'تم إيقاف البحث':e?.message||'تعذرت قراءة تبويب أمازون',code:e?.code||'NETWORK'});
  });return true;
 });

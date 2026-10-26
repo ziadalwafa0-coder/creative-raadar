@@ -5,26 +5,28 @@ import vm from 'node:vm';
 const source=fs.readFileSync(new URL('./worker.js',import.meta.url),'utf8').replaceAll('export ','');
 const asin='B000000001';
 function setup(){
- let listener:any,clock=100000,challenge=false,wrongPage=false,hold=false;let finishRead:(value:any)=>void=()=>{};
+ let listener:any,clock=100000,challenge=false,wrongPage=false,hold=false,holdCreate=false;let finishRead:(value:any)=>void=()=>{},finishCreate:()=>void=()=>{};
  const updated=new Set<any>(),removed=new Set<any>();
  const pages=new Map<number,any>([[7,{id:7,url:'https://creative-raadar.vercel.app/',status:'complete',active:true}]]);
  const navigations:string[]=[];let fetches=0,next=100;
  const event=(listeners:Set<any>)=>({addListener:(f:any)=>listeners.add(f),removeListener:(f:any)=>listeners.delete(f)});
  const complete=(tab:any)=>queueMicrotask(()=>{tab.status='complete';for(const fn of updated)fn(tab.id,{status:'complete'},tab);});
  const tabs={onUpdated:event(updated),onRemoved:event(removed),
-  create:async(options:any)=>{const tab={id:next++,...options,status:'loading'};pages.set(tab.id,tab);navigations.push(options.url);complete(tab);return tab;},
+  create:async(options:any)=>{const tab={id:next++,...options,status:'loading'};pages.set(tab.id,tab);navigations.push(options.url);complete(tab);if(holdCreate)await new Promise<void>(resolve=>finishCreate=resolve);return tab;},
   get:async(id:number)=>{if(!pages.has(id))throw Error('No tab');return pages.get(id);},
   update:async(id:number,changes:any)=>{const tab=pages.get(id);if(!tab)throw Error('No tab');Object.assign(tab,changes);if(changes.url){navigations.push(changes.url);tab.status='loading';complete(tab);}return tab;},
   query:async()=>[...pages.values()],
-  sendMessage:async(id:number)=>{
+  remove:async(id:number)=>{pages.delete(id);for(const fn of removed)fn(id);},
+  sendMessage:async(id:number,message:any)=>{
    if(challenge)return{error:'Robot Check',code:'CAPTCHA'};
    const tab=pages.get(id);const result={html:'<html>public reviews</html>',url:wrongPage?'https://www.amazon.com/dp/B000000099':tab.url,asin,market:'amazon.com'};
+   if(message.operation==='cr-check-public-page')return{ok:true,url:result.url};
    if(hold)return new Promise(resolve=>{finishRead=resolve;});return result;
   },
  };
- vm.runInNewContext(source,{URL,AbortController,AbortSignal,setTimeout,clearTimeout,Date:{now:()=>clock},fetch:()=>{fetches++;throw Error('fetch must never run');},chrome:{tabs,runtime:{onMessage:{addListener(fn:any){listener=fn;}}}}});
+ const boot=()=>vm.runInNewContext(source,{URL,AbortController,AbortSignal,setTimeout,clearTimeout,Date:{now:()=>clock},fetch:()=>{fetches++;throw Error('fetch must never run');},chrome:{tabs,runtime:{onMessage:{addListener(fn:any){listener=fn;}}}}});boot();
  const send=(message:any)=>{clock+=3000;return new Promise<any>(resolve=>listener(message,{url:'https://creative-raadar.vercel.app/',frameId:0,tab:{id:7}},resolve));};
- return{send,pages,navigations,updated,removed,fetches:()=>fetches,setChallenge:(value:boolean)=>{challenge=value;},setWrong:()=>{wrongPage=true;},setHold:(value=true)=>{hold=value;},finish:(value:any)=>finishRead(value)};
+ return{send,pages,navigations,updated,removed,fetches:()=>fetches,setChallenge:(value:boolean)=>{challenge=value;},setWrong:()=>{wrongPage=true;},setHold:(value=true)=>{hold=value;},finish:(value:any)=>finishRead(value),holdCreate:()=>{holdCreate=true;},finishCreate:()=>{holdCreate=false;finishCreate();},restart:()=>{updated.clear();removed.clear();boot();}};
 }
 test('primary search and product collection navigate one visible tab and never fetch Amazon HTML',async()=>{
  const s=setup();await s.send({operation:'begin_browser',jobId:'job1'});
@@ -65,4 +67,33 @@ test('cancellation aborts a pending page read and a late old response cannot ent
  s.setHold(false);s.finish({html:'OLD',url:'https://www.amazon.com/s?k=Portable%20Iron'});
  const next=await s.send({operation:'product',market:'amazon.com',asin,jobId:'new',transport:'tab',id:'new-request'});
  assert.equal(next.html,'<html>public reviews</html>');assert.equal(s.fetches(),0);
+});
+
+test('changing products while tab creation is pending still reuses exactly one work tab',async()=>{
+ const s=setup();s.holdCreate();await s.send({operation:'begin_browser',jobId:'old'});
+ const pending=s.send({operation:'search',market:'amazon.com',query:'old product',jobId:'old',transport:'tab',id:'old'});
+ await new Promise(resolve=>setImmediate(resolve));await s.send({operation:'begin_browser',jobId:'new'});s.finishCreate();
+ assert(!(await pending).html);
+ const result=await s.send({operation:'product',market:'amazon.com',asin,jobId:'new',transport:'tab',id:'new'});
+ assert(result.html);assert.equal(s.pages.size,2);assert.equal(s.fetches(),0);
+});
+
+test('worker suspension recovers only its marked tab and checks it before navigating',async()=>{
+ const s=setup();await s.send({operation:'begin_browser',jobId:'first'});
+ await s.send({operation:'product',market:'amazon.com',asin,jobId:'first',transport:'tab',id:'first'});
+ s.restart();await s.send({operation:'begin_browser',jobId:'next'});
+ assert((await s.send({operation:'product',market:'amazon.com',asin,jobId:'next',transport:'tab',id:'next'})).html);
+ assert.equal(s.pages.size,2);assert.equal(s.fetches(),0);
+ s.restart();s.setChallenge(true);await s.send({operation:'begin_browser',jobId:'blocked'});
+ const before=s.navigations.length;
+ assert.equal((await s.send({operation:'product',market:'amazon.com',asin,jobId:'blocked',transport:'tab',id:'blocked'})).code,'CAPTCHA');
+ assert.equal(s.navigations.length,before);
+});
+
+test('closing the app cleans up only its marked work tab, even after worker suspension',async()=>{
+ const s=setup();await s.send({operation:'begin_browser',jobId:'first'});
+ await s.send({operation:'product',market:'amazon.com',asin,jobId:'first',transport:'tab',id:'first'});
+ s.pages.set(101,{id:101,url:'https://www.amazon.com/dp/B000000099',status:'complete'});
+ s.restart();s.pages.delete(7);for(const fn of s.removed)fn(7);
+ await new Promise(resolve=>setImmediate(resolve));assert(!s.pages.has(100));assert(s.pages.has(101));
 });

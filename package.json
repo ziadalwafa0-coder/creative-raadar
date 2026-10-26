@@ -10,7 +10,7 @@
     "dev:frontend": "vite --host 127.0.0.1",
     "build": "npm run build:extension && vite build",
     "build:extension": "node scripts/package-extension.mjs",
-    "test:browser": "tsx --test frontend/browserCollector.test.ts frontend/translateProduct.test.ts frontend/amazonProductName.test.ts frontend/productIdentity.test.ts frontend/productVision.test.ts frontend/imageMatch.test.ts frontend/identifyProduct.test.ts extension/reader.test.ts extension/navigation.test.ts frontend/mediaTicket.test.ts frontend/productReference.test.ts",
+    "test:browser": "tsx --test frontend/browserCollector.test.ts frontend/translateProduct.test.ts frontend/amazonProductName.test.ts frontend/productIdentity.test.ts frontend/productVision.test.ts frontend/imageMatch.test.ts frontend/identifyProduct.test.ts extension/reader.test.ts extension/navigation.test.ts frontend/mediaTicket.test.ts frontend/productReference.test.ts frontend/aiAmazonQuery.test.ts",
     "preview": "vite preview",
     "test": "tsx --test src/**/*.test.ts",
     "test:isolation": "tsx --test src/server/productIsolation.test.ts src/utils/rules.test.ts",

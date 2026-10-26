@@ -6,11 +6,11 @@ import type {Marketplace} from '../backend/src/types';
 import type {ImageComparison} from './imageMatch';
 export type MatchedProduct=BrowserProduct&{visualEvidence:ImageComparison};
 export type IdentityProposal={query:string;family:ProductFamily;conflict:boolean;uncertain:boolean;alternatives:string[];products:MatchedProduct[];inspected?:number;compared?:number};
-export async function identifyProduct(image:Blob,englishHint:string,market:Marketplace,signal:AbortSignal,progress:(text:string)=>void,onIdentity?:(proposal:IdentityProposal)=>void):Promise<IdentityProposal>{
+export async function identifyProduct(image:Blob,englishHint:string,market:Marketplace,signal:AbortSignal,progress:(text:string)=>void,onIdentity?:(proposal:IdentityProposal)=>void,services?:Partial<{request:typeof browserRequest;loadImage:typeof loadAmazonImage;compare:typeof compareProductImages}>):Promise<IdentityProposal>{
  // Never replace the supplied product name with an unrelated guessed image category.
  const family=productFamilies.find(f=>f[2].test(englishHint))?.[0]||'custom';
  const identity={query:englishHint,family,conflict:false,uncertain:true,alternatives:[],products:[]};
- onIdentity?.(identity);return findIdentityCandidates(image,identity,market,signal,progress);
+ onIdentity?.(identity);return findIdentityCandidates(image,identity,market,signal,progress,{request:browserRequest,loadImage:loadAmazonImage,compare:compareProductImages,...services});
 }
 export async function loadAmazonImage(url:string,signal:AbortSignal):Promise<Blob>{
  if(!safeMediaUrl(url))throw Error('مصدر صورة غير مسموح');
