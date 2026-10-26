@@ -59,7 +59,7 @@ export function browserRequest(operation:string,payload:Record<string,string>,si
    else if(operation==='search'&&event.data.page!==Number(payload.page||1))reject(Error('نسخة الإضافة المحمّلة قديمة؛ حمّل النسخة الجديدة وفكها في نفس فولدر الإضافة ثم اضغط Reload. النسخة القديمة تعيد أول صفحة بدل الانتقال للصفحات التالية.'));
    else resolve(event.data);
   };
-  const timer=setTimeout(()=>{cleanup();if(automated)window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),target:id,operation:'cancel'},location.origin);reject(Error(operation==='ping'?'ثبّت إضافة Creative Radaar المجانية ثم أعد تحميل الصفحة':operation==='read_open_product'?'صفحة أمازون لم ترد. ارجع إليها حتى تظهر بشكل طبيعي، ثم ارجع للموقع واقرأها مرة أخرى.':'تبويب أمازون لم يكتمل في الوقت المحدد؛ راجعه قبل بدء بحث آخر.'));},timeout);
+  const timer=setTimeout(()=>{cleanup();if(automated)window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),target:id,operation:'cancel'},location.origin);reject(Error(operation==='ping'?'ثبّت إضافة Creative Radaar المجانية ثم أعد تحميل الصفحة':operation==='read_open_product'?'صفحة أمازون لم ترد. ارجع إليها حتى تظهر بشكل طبيعي، ثم ارجع للموقع واقرأها مرة أخرى.':'أمازون لم يرد في الوقت المحدد؛ توقف الجلب المباشر بدون فتح تبويبات.'));},timeout);
   signal.addEventListener('abort',abort,{once:true});window.addEventListener('message',receive);
   window.postMessage({channel:'cr-browser-request',id,operation,...payload,...(automated?{transport:'http',jobId}:{})},location.origin);
  });
