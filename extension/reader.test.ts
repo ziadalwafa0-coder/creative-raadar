@@ -39,7 +39,7 @@ test('reader refuses challenges, login pages and mismatched variants without cli
 });
 test('reader adds no hosts or powerful extension permissions',()=>{
  const manifest=JSON.parse(fs.readFileSync(new URL('./manifest.json',import.meta.url),'utf8'));
- assert.equal(manifest.version,'1.3.1');assert.equal(manifest.permissions,undefined);
+ assert.equal(manifest.version,'1.3.2');assert.equal(manifest.permissions,undefined);
  assert.deepEqual(manifest.host_permissions,['https://www.amazon.com/*','https://www.amazon.eg/*','https://www.amazon.sa/*','https://www.amazon.ae/*']);
  assert(manifest.content_scripts.some((s:any)=>s.js.includes('amazon-reader.js')));
 });

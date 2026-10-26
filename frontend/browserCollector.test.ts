@@ -88,7 +88,7 @@ test('challenge stops the run instead of repeatedly hitting more products',async
  await assert.rejects(searchInBrowser('clothes rack','amazon.com','run',new AbortController().signal,e=>events.push(e),request),/تحقق/);
  assert.equal(products,1);assert(events.some(e=>e.code==='CAPTCHA'&&e.type==='warn'&&e.reason.includes('تحقق')));assert(!events.some(e=>e.done));
 });
-test('extension worker only permits fixed Amazon URLs and exposes the no-tab collector capability',async()=>{
+test('extension worker only permits fixed Amazon URLs and exposes the visible-tab collector capability',async()=>{
  let listener:any;let options:any;let called='';
  Object.assign(globalThis,{chrome:{runtime:{onMessage:{addListener:(fn:any)=>{listener=fn;}}}}});
  const {requestUrl}=await import('../extension/worker.js');
@@ -96,10 +96,10 @@ test('extension worker only permits fixed Amazon URLs and exposes the no-tab col
  assert.throws(()=>requestUrl({operation:'product',market:'amazon.com',asin:'../../ap/signin'}));
  assert.equal(requestUrl({operation:'product',market:'amazon.com',asin}),`https://www.amazon.com/dp/${asin}`);
  const ready:any=await new Promise(resolve=>listener({operation:'ping'},{url:'https://creative-raadar.vercel.app/',frameId:0,tab:{id:8}},resolve));
- assert.equal(ready.protocol,2);assert.equal(ready.version,'1.3.1');assert.equal(ready.pagination,true);
+ assert.equal(ready.protocol,2);assert.equal(ready.version,'1.3.2');assert.equal(ready.pagination,true);
  assert(requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'2'}).endsWith('&page=2'));
  assert.throws(()=>requestUrl({operation:'search',market:'amazon.com',query:'rack',page:'99'}));
- assert.equal(ready.browserNavigation,false);assert.equal(ready.directFetch,true);assert.equal(ready.reviewReveal,true);
+ assert.equal(ready.browserNavigation,true);assert.equal(ready.directFetch,false);assert.equal(ready.reviewReveal,true);
  assert.equal(listener({operation:'product',market:'amazon.com',asin},{url:'https://evil.test/',frameId:0,tab:{id:8}},()=>{throw Error('must not respond');}),false);
 
 });

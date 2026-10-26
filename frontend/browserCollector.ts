@@ -8,7 +8,7 @@ export type BrowserEvent=SearchEvent|{id:string;type:'image';image:ReviewImage};
 export interface MediaLimits {videos:number;images:number}
 export interface ReviewDiagnostics {reviews:number;videoBlocks:number;videoItems:number;hasReviewsSection:boolean;scrolled?:boolean;clickedTab?:boolean}
 export function describeEmptyProduct(asin:string,d?:ReviewDiagnostics){
- if(!d)return `${asin}: تعذر تشخيص الريفيوهات؛ حدّث الإضافة إلى 1.3.1.`;
+ if(!d)return `${asin}: تعذر تشخيص الريفيوهات؛ حدّث الإضافة إلى 1.3.2.`;
  if(!d.hasReviewsSection)return `${asin}: قسم الريفيوهات ما ظهرش في الصفحة المقروءة.`;
  if(d.videoItems)return `${asin}: لقينا ${d.videoItems} فيديو واترفضوا (مش ريفيو عميل أو لموديل تاني).`;
  return `${asin}: لقينا ${d.reviews} ريفيو بس مفيش قسم فيديوهات للعملاء${d.clickedTab?' بعد فتح تبويب الفيديوهات':''}.`;
@@ -37,8 +37,8 @@ export function sessionSearchRequest(parent:AbortSignal,request=browserRequest):
 }
 export async function beginBrowserSession(jobId:string,signal:AbortSignal){
  const capability=await browserRequest('ping',{},signal,1800);
- if(capability.multipleCollectors)throw Error('في أكثر من نسخة للإضافة مفعّلة. اقفل النسخ القديمة وسيب Creative Radaar 1.3.1 فقط ثم أعد تحميل الموقع.');
- if(!capability.directFetch||!capability.reviewReveal)throw Error('البحث الجديد يحتاج إضافة Creative Radaar 1.3.1؛ حدّثها لتفعيل الجلب بدون فتح تبويبات.');
+ if(capability.multipleCollectors)throw Error('في أكثر من نسخة للإضافة مفعّلة. اقفل النسخ القديمة وسيب Creative Radaar 1.3.2 فقط ثم أعد تحميل الموقع.');
+ if(!capability.browserNavigation||!capability.reviewReveal)throw Error('البحث الجديد يحتاج إضافة Creative Radaar 1.3.2؛ حدّثها لتفعيل الجلب من تبويب أمازون واحد.');
  signal.throwIfAborted();browserJobs.set(signal,jobId);
  // Chrome may suspend an idle MV3 worker while local image inference is running.
  // This heartbeat reads no Amazon page and ends with the ephemeral search session.
@@ -68,15 +68,15 @@ export function browserRequest(operation:string,payload:Record<string,string>,si
     },250);
     return;
    }
-   if(event.data.protocol!==2||automated&&event.data.transport!=='http')return;
+   if(event.data.protocol!==2||automated&&event.data.transport!=='tab')return;
    cleanup();
    if(event.data.error)reject(['BLOCKED','NETWORK','CAPTCHA','LOGIN_WALL'].includes(event.data.code)?new SourceError(event.data.code,event.data.error):Error(event.data.error));
    else if(operation==='search'&&event.data.page!==Number(payload.page||1))reject(Error('نسخة الإضافة المحمّلة قديمة؛ حمّل النسخة الجديدة وفكها في نفس فولدر الإضافة ثم اضغط Reload. النسخة القديمة تعيد أول صفحة بدل الانتقال للصفحات التالية.'));
    else resolve(event.data);
   };
-  const timer=setTimeout(()=>{cleanup();if(automated)window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),target:id,operation:'cancel'},location.origin);reject(Error(operation==='ping'?'ثبّت إضافة Creative Radaar المجانية ثم أعد تحميل الصفحة':operation==='read_open_product'?'صفحة أمازون لم ترد. ارجع إليها حتى تظهر بشكل طبيعي، ثم ارجع للموقع واقرأها مرة أخرى.':'أمازون لم يرد في الوقت المحدد؛ توقف الجلب المباشر بدون فتح تبويبات.'));},timeout);
+  const timer=setTimeout(()=>{cleanup();if(automated)window.postMessage({channel:'cr-browser-request',id:crypto.randomUUID(),target:id,operation:'cancel'},location.origin);reject(Error(operation==='ping'?'ثبّت إضافة Creative Radaar المجانية ثم أعد تحميل الصفحة':operation==='read_open_product'?'صفحة أمازون لم ترد. ارجع إليها حتى تظهر بشكل طبيعي، ثم ارجع للموقع واقرأها مرة أخرى.':'صفحة أمازون لم تكتمل في الوقت المحدد؛ راجع تبويب العمل الظاهر.'));},timeout);
   signal.addEventListener('abort',abort,{once:true});window.addEventListener('message',receive);
-  window.postMessage({channel:'cr-browser-request',id,operation,...payload,...(automated?{transport:'http',jobId}:{})},location.origin);
+  window.postMessage({channel:'cr-browser-request',id,operation,...payload,...(automated?{transport:'tab',jobId}:{})},location.origin);
  });
 }
 export function readAmazonDocument(html:string):Document{

@@ -6,6 +6,6 @@ The existing Vite/React application imports `CustomerReviewsApp.tsx` from this f
 
 Results stay in React state. New input, a new marketplace, a new search or a refresh clears them. No project storage is used by this UI. The short-lived access-code session token stays in sessionStorage; API/provider secrets never enter the client bundle.
 
-Automatic extension collection opens no Amazon tabs. Amazon may reject public requests; failures stop collection rather than retrying with alternate identities. Search pages are shared between image and media passes only within the current run. VSE content identifiers prevent multiple encodings of one clip from counting as separate customer videos.
+Automatic extension collection uses one visible Amazon work tab. A challenge or access refusal stops navigation; the user can inspect the tab and explicitly request a read-only check before starting a new job. No direct HTML fetch or alternate identity is used. Search pages are shared between image and media passes only within the current run. VSE content identifiers prevent multiple encodings of one clip from counting as separate customer videos.
 
 See `../backend/README.ar.md` for deployment and configuration.

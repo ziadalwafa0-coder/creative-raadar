@@ -10,7 +10,7 @@ test('query helper filters malformed phrases and safely falls back on unavailabl
 });
 test('empty review diagnostics explain missing sections and rejected non-customer media',()=>{
  const base={reviews:3,videoBlocks:0,videoItems:0,hasReviewsSection:true};
- assert.match(describeEmptyProduct('ASIN'),/1.3.1/);assert.match(describeEmptyProduct('ASIN',{...base,hasReviewsSection:false}),/ما ظهرش/);
+ assert.match(describeEmptyProduct('ASIN'),/1.3.2/);assert.match(describeEmptyProduct('ASIN',{...base,hasReviewsSection:false}),/ما ظهرش/);
  assert.match(describeEmptyProduct('ASIN',base),/3 ريفيو/);assert.match(describeEmptyProduct('ASIN',{...base,clickedTab:true}),/بعد فتح/);
  assert.match(describeEmptyProduct('ASIN',{...base,videoItems:4}),/لموديل تاني/);
 });
