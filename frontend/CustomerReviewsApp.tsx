@@ -12,6 +12,7 @@ import {AmazonRecovery} from './AmazonRecovery';
 import {mediaTicket,SessionExpired} from './mediaTicket';
 import {productReference} from './productReference';
 import {timedRequest} from './request';
+import {videoIdentity} from '../backend/src/utils';
 const input='w-full p-3 rounded-xl bg-[#f9fbf9] border border-[#dce4df]';
 export function CustomerReviewsApp({api}:{api:string}){
  const [token,setToken]=useState(()=>sessionStorage.getItem('cr_reviews_token')||'');const [authorized,setAuthorized]=useState(false);const [code,setCode]=useState('');
@@ -45,7 +46,7 @@ export function CustomerReviewsApp({api}:{api:string}){
   const warn=(reason:string)=>{if(session.current.current(run.id))setWarnings(p=>p.includes(reason)?p:[...p,reason]);};
   const receive=(event:BrowserEvent)=>{
    if(!session.current.current(run.id)||event.id!==run.id)return;
-   if('type' in event&&event.type==='video'&&!seenVideos.has(event.video.url)&&seenVideos.size<limits.videos){seenVideos.add(event.video.url);setVideos(p=>[...p,event.video]);}
+   if('type' in event&&event.type==='video'&&!seenVideos.has(videoIdentity(event.video.url))&&seenVideos.size<limits.videos){seenVideos.add(videoIdentity(event.video.url));setVideos(p=>[...p,event.video]);}
    if('type' in event&&event.type==='image'&&!seenPhotos.has(event.image.url)&&seenPhotos.size<limits.images){seenPhotos.add(event.image.url);setPhotos(p=>[...p,event.image]);}
    if('type' in event&&event.type==='progress')setStatus('جاري فحص المنتج '+event.index+' من '+event.total);
    if('type' in event&&event.type==='warn')warn(event.reason);

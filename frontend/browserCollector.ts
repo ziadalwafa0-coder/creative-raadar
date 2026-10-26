@@ -1,7 +1,7 @@
 import {markets,type Marketplace,type ProductHit,type SearchEvent,SourceError} from '../backend/src/types';
 import {parseCustomerVideoBlocks} from '../backend/src/parser';
 import {parseRatingsCount,isAmazonErrorPage} from '../backend/src/utils';
-import {safeMediaUrl} from '../backend/src/utils';
+import {safeMediaUrl,videoIdentity} from '../backend/src/utils';
 export interface ReviewImage {url:string;sourceAsin:string;sourceUrl:string;title:string}
 export type BrowserProduct=ProductHit&{imageUrl?:string};
 export type BrowserEvent=SearchEvent|{id:string;type:'image';image:ReviewImage};
@@ -160,7 +160,7 @@ export async function searchInBrowser(query:string,market:Marketplace,id:string,
    const videos=parseCustomerVideoBlocks(blocks,product.asin,market);
    const images=readCustomerImages(doc,product.asin,market);
    if(limits.videos&&!videos.length&&reasons.length<3)reasons.push(describeEmptyProduct(product.asin,result.diagnostics||reviewDiagnostics(doc)));
-   for(const video of videos){if(seen.size>=limits.videos)break;if(seen.has(video.url)||history.videos.has(video.url))continue;seen.add(video.url);history.videos.add(video.url);emit({id,type:'video',video});}
+   for(const video of videos){if(seen.size>=limits.videos)break;const key=videoIdentity(video.url);if(seen.has(key)||history.videos.has(key))continue;seen.add(key);history.videos.add(key);emit({id,type:'video',video});}
    for(const image of images){if(seenImages.size>=limits.images)break;if(seenImages.has(image.url)||history.images.has(image.url))continue;seenImages.add(image.url);history.images.add(image.url);emit({id,type:'image',image});}
   }catch(error){signal.throwIfAborted();emit({id,type:'warn',reason:error instanceof Error?error.message:'تعذر فحص المنتج',code:error instanceof SourceError?error.code:undefined});if(error instanceof SourceError&&['CAPTCHA','BLOCKED','LOGIN_WALL'].includes(error.code))throw error;}
   }

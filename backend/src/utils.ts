@@ -12,7 +12,12 @@ export function safeMediaUrl(value:string):boolean {
  // Exact host membership also rejects every IP literal; keep this shared parser browser-compatible.
  try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&mediaHosts.has(u.hostname);}catch{return false;}
 }
-export function dedupeVideos(videos:ReviewVideo[]) {const seen=new Set<string>();return videos.filter(v=>{if(seen.has(v.url))return false;seen.add(v.url);return true;});}
+/** One Amazon clip can have multiple MP4/HLS renditions and signed URLs. */
+export function videoIdentity(url:string):string {
+ try{const parsed=new URL(url);if(safeMediaUrl(url)){const id=parsed.pathname.match(/\/vse-vms-transcoding-artifact-[^/]+\/([a-f0-9-]{16,})(?:\/|$)/i)?.[1];if(id)return 'amazon-vse:'+id.toLowerCase();}}catch{}
+ return url;
+}
+export function dedupeVideos(videos:ReviewVideo[]) {const seen=new Set<string>();return videos.filter(v=>{const key=videoIdentity(v.url);if(seen.has(key))return false;seen.add(key);return true;});}
 export const decodeHtml=(v:string)=>v.replace(/&quot;/g,'"').replace(/&#39;|&#x27;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
 export function videoType(url:string):'mp4'|'hls'|undefined {return /\.m3u8(?:[?#]|$)/i.test(url)?'hls':/\.mp4(?:[?#]|$)/i.test(url)?'mp4':undefined;}
 export function normalizeQuery(query:string){return query.normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase();}

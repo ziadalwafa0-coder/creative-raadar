@@ -60,6 +60,22 @@ test('browser pipeline filters seller and wrong product, deduplicates and caps a
  await searchInBrowser('clothes rack','amazon.com','run1',new AbortController().signal,e=>events.push(e),request);
  const videos=events.filter(e=>e.type==='video');assert.equal(videos.length,50);assert(videos.every(e=>e.video.sourceAsin===other));assert.equal(events.at(-1).count,50);assert.deepEqual(calls,['ping','search','product']);
 });
+
+test('HLS and MP4 renditions of the same customer clip count once across different products',async()=>{
+ const events:any[]=[];let inspected=0;
+ const clip=(id:string,file:string)=>`https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1/${id}/${file}`;
+ const first='12345678-1234-1234-1234-123456789012',second='87654321-1234-1234-1234-123456789012';
+ const request=async(operation:string,p:any)=>{
+  if(operation==='ping')return {pagination:true};
+  if(operation==='search')return {html:searchHtml};
+  inspected++;
+  const urls=inspected===1?[clip(first,'video.mp4'),clip(first,'video.m3u8?token=x')]:[clip(first,'other.mp4'),clip(second,'video.mp4')];
+  return {html:productHtml(p.asin,urls.map(videoURL=>({creatorType:'customer',productAsin:p.asin,videoURL})))};
+ };
+ await searchInBrowser('shoe rack','amazon.com','unique-clips',new AbortController().signal,e=>events.push(e),request,{videos:2,images:0});
+ assert.equal(inspected,2);assert.equal(events.filter(e=>e.type==='video').length,2);
+ assert(events.filter(e=>e.type==='video').some(e=>e.video.url.includes(second)));
+});
 test('new search cancellation discards a late product response',async()=>{
  const controller=new AbortController();const events:any[]=[];
  const request=async(operation:string)=>{if(operation==='ping')return{};if(operation==='search')return{html:searchHtml};controller.abort();return{html:productHtml(other,[{creatorType:'customer',productAsin:other,videoURL:media(1)}])};};
