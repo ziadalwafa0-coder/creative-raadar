@@ -6,7 +6,7 @@ import {translateProductName,hasArabic} from './translateProduct';
 import {identifyProduct} from './identifyProduct';
 import {aiAmazonQueries} from './aiAmazonQuery';
 import {matchesIdentity,productFamilies} from './productIdentity';
-import {searchInBrowser,collectProductDocument,browserRequest,beginBrowserSession,inheritBrowserSession,type BrowserEvent,type ReviewImage} from './browserCollector';
+import {searchInBrowser,collectProductDocument,browserRequest,sessionSearchRequest,beginBrowserSession,inheritBrowserSession,type BrowserEvent,type ReviewImage} from './browserCollector';
 import {SourceError,markets,type Marketplace} from '../backend/src/types';
 import {AmazonRecovery} from './AmazonRecovery';
 import {mediaTicket,SessionExpired} from './mediaTicket';
@@ -53,6 +53,7 @@ export function CustomerReviewsApp({api}:{api:string}){
   try{
    const reference=productReference(query,market as Marketplace);
    releaseBrowser=await beginBrowserSession(run.id,run.signal);
+   const request=sessionSearchRequest(run.signal);
    if(reference){
     setMarket(reference.market);setTranslatedQuery('ASIN: '+reference.asin);setStatus('جاري قراءة المنتج المحدد…');
     warn('الجمع من رابط المنتج المحدد فقط.');
@@ -67,17 +68,17 @@ export function CustomerReviewsApp({api}:{api:string}){
     if(imageFile.current&&!nameOnly){
      try{
       const visualSignal=inheritBrowserSession(run.signal,AbortSignal.any([run.signal,AbortSignal.timeout(12000)]));
-      const visual=await identifyProduct(imageFile.current,englishName,market as Marketplace,visualSignal,t=>{if(session.current.current(run.id))setStatus(t);});
+      const visual=await identifyProduct(imageFile.current,englishName,market as Marketplace,visualSignal,t=>{if(session.current.current(run.id))setStatus(t);},undefined,{request});
       run.signal.throwIfAborted();preferredAsin=visual.products[0]?.asin;
       warn(preferredAsin?'الصورة طابقت منتجًا على أمازون؛ نبدأ به ثم نكمل نتائج الاسم والمواصفات لو العدد ناقص.':'الصورة ما طابقتش بدقة؛ نكمل بالاسم والمواصفات ومطابقة الموديل غير مؤكدة.');
-     }catch(e){run.signal.throwIfAborted();if(e instanceof SourceError&&['BLOCKED','CAPTCHA','LOGIN_WALL'].includes(e.code))throw e;warn('تعذر إكمال مقارنة الصورة بسرعة؛ نكمل البحث بالاسم والمواصفات.');}
+     }catch(e){run.signal.throwIfAborted();if(e instanceof SourceError)throw e;warn('لم تكتمل مقارنة الصورة؛ مطابقة الشكل غير مؤكدة، ونستخدم نتائج الاسم والمواصفات.');}
     }
     const history={videos:new Set<string>(),images:new Set<string>(),asins:new Set<string>()};let lastError:unknown;
     for(const q of queries){
      run.signal.throwIfAborted();const remaining={videos:limits.videos-seenVideos.size,images:limits.images-seenPhotos.size};if(!remaining.videos&&!remaining.images)break;
      const family=productFamilies.find(f=>f[2].test(q))?.[0]||'custom';
-     try{await searchInBrowser(q,market as Marketplace,run.id,run.signal,receive,browserRequest,remaining,p=>matchesIdentity(p.title,q,family),preferredAsin,history);}
-     catch(e){run.signal.throwIfAborted();if(e instanceof SourceError&&['BLOCKED','CAPTCHA','LOGIN_WALL'].includes(e.code))throw e;lastError=e;warn('بحث «'+q+'»: '+(e instanceof Error?e.message:'تعذر البحث'));}
+     try{await searchInBrowser(q,market as Marketplace,run.id,run.signal,receive,request,remaining,p=>matchesIdentity(p.title,q,family),preferredAsin,history);}
+     catch(e){run.signal.throwIfAborted();if(e instanceof SourceError)throw e;lastError=e;if(q!==queries.at(-1)||seenVideos.size||seenPhotos.size)warn('بحث «'+q+'»: '+(e instanceof Error?e.message:'تعذر البحث'));}
     }
     if(lastError&&!seenVideos.size&&!seenPhotos.size)throw lastError;
    }

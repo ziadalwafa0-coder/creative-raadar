@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DOMParser} from 'linkedom';
-import {browserRequest,readAmazonDocument,readBrowserProducts,readCustomerImages,searchInBrowser,collectApprovedProduct} from './browserCollector';
+import {browserRequest,sessionSearchRequest,readAmazonDocument,readBrowserProducts,readCustomerImages,searchInBrowser,collectApprovedProduct} from './browserCollector';
 Object.assign(globalThis,{DOMParser});
 const asin='B000000001';const other='B000000002';
 const media=(i:number)=>`https://m.media-amazon.com/test-${i}.mp4`;
@@ -21,6 +21,27 @@ test('browser parser sorts actual search-card counts and recognizes error-image 
 test('Amazon brand headings cannot replace the actual product title',()=>{
  const html=`<html><body><div data-component-type="s-search-result" data-asin="${asin}"><h2>Calmootey</h2><a class="a-text-normal" href="/dp/${asin}"><h2 aria-label="Calmootey 9 Tier Shoe Rack with Cover">Calmootey 9 Tier Shoe Rack with Cover</h2></a></div></body></html>`;
  assert.equal(readBrowserProducts(readAmazonDocument(html),'amazon.com')[0].title,'Calmootey 9 Tier Shoe Rack with Cover');
+});
+
+test('search cards without component type remain readable and duplicate layouts do not duplicate products',()=>{
+ const card=`<div class="s-result-item" data-asin="${asin.toLowerCase()}"><h2>9 Tier Shoe Rack</h2><a aria-label="1.2K ratings"></a></div>`;
+ const hits=readBrowserProducts(readAmazonDocument(`<html><body>${card}${card}</body></html>`),'amazon.com');
+ assert.equal(hits.length,1);assert.equal(hits[0].asin,asin);assert.equal(hits[0].ratingsCount,1200);
+ assert.throws(()=>readBrowserProducts(readAmazonDocument('<html><body>Unrecognized response</body></html>'),'amazon.com'),/ليس تأكيدًا لعدم وجود المنتج/);
+ assert.deepEqual(readBrowserProducts(readAmazonDocument('<html><body>No results for this query</body></html>'),'amazon.com'),[]);
+ assert.throws(()=>readAmazonDocument('<html><body><form action="/errors/validateCaptcha"></form></body></html>'),/تحقق/);
+});
+
+test('an expired image comparison reuses the same pending search for collection without another Amazon request',async()=>{
+ const parent=new AbortController(),visual=new AbortController();let calls=0;let complete!:(value:any)=>void;
+ const cached=sessionSearchRequest(parent.signal,async(_operation,_payload,signal)=>{calls++;assert.equal(signal,parent.signal);return new Promise(resolve=>{complete=resolve;});});
+ const payload={market:'amazon.com',query:'9 Tier Shoe Rack',page:'1'};
+ const imagePass=cached('search',payload,visual.signal);visual.abort(Error('image budget expired'));await assert.rejects(imagePass,/image budget expired/);
+ const mediaPass=cached('search',payload,parent.signal);complete({html:searchHtml});assert.equal((await mediaPass).html,searchHtml);assert.equal(calls,1);
+ parent.abort();await assert.rejects(async()=>cached('search',payload,parent.signal));
+ const failed=sessionSearchRequest(new AbortController().signal,async()=>{calls++;throw Error('source failed');});
+ await assert.rejects(failed('search',payload,new AbortController().signal),/source failed/);
+ await assert.rejects(failed('search',payload,new AbortController().signal),/source failed/);assert.equal(calls,2);
 });
 test('visual identity filters wrong products and continues if an entire search page is unrelated',async()=>{
  const events:any[]=[];const inspected:string[]=[];const pages:string[]=[];

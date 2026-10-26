@@ -20,6 +20,21 @@ function reviewDiagnostics(doc:Document):ReviewDiagnostics{
 }
 const browserJobs=new WeakMap<AbortSignal,string>();
 export function inheritBrowserSession(parent:AbortSignal,child:AbortSignal){const job=browserJobs.get(parent);if(job)browserJobs.set(child,job);return child;}
+/** Share only this run's search-page response between image and media passes. */
+export function sessionSearchRequest(parent:AbortSignal,request=browserRequest):typeof browserRequest{
+ const pages=new Map<string,Promise<any>>();parent.addEventListener('abort',()=>pages.clear(),{once:true});
+ return(operation,payload,signal,timeout)=>{
+  signal.throwIfAborted();parent.throwIfAborted();
+  if(operation!=='search')return request(operation,payload,signal,timeout);
+  const key=JSON.stringify([payload.market,payload.query,payload.page||'1']);
+  let page=pages.get(key);if(!page){page=request(operation,payload,parent,timeout);pages.set(key,page);}
+  return new Promise((resolve,reject)=>{
+   const abort=()=>{signal.removeEventListener('abort',abort);reject(signal.reason||Error('تم إلغاء البحث'));};
+   signal.addEventListener('abort',abort,{once:true});
+   page!.then(value=>{signal.removeEventListener('abort',abort);if(signal.aborted)abort();else resolve(value);},error=>{signal.removeEventListener('abort',abort);reject(error);});
+  });
+ };
+}
 export async function beginBrowserSession(jobId:string,signal:AbortSignal){
  const capability=await browserRequest('ping',{},signal,1800);
  if(capability.multipleCollectors)throw Error('في أكثر من نسخة للإضافة مفعّلة. اقفل النسخ القديمة وسيب Creative Radaar 1.3.1 فقط ثم أعد تحميل الموقع.');
@@ -69,13 +84,14 @@ export function readAmazonDocument(html:string):Document{
  if(isAmazonErrorPage(doc.title,text))throw new SourceError('BLOCKED','أمازون رفض الطلب من اتصالك؛ جرّب لاحقًا');
  if(/Click the button below to continue shopping/i.test(text))throw new SourceError('BLOCKED','أمازون أوقف الوصول للصفحة؛ تم إيقاف الفحص دون اعتماد منتجات بديلة');
  if(/Robot Check|validateCaptcha|Enter the characters you see below|verify.*human/i.test(text))throw new SourceError('CAPTCHA','أمازون طلب تحققًا بشريًا؛ تم إيقاف الجلب');
- if(doc.querySelector('form[name="signIn"]'))throw new SourceError('LOGIN_WALL','أمازون طلب تسجيل الدخول؛ الجلب المجاني يقرأ الصفحات العامة فقط');
+ if(doc.querySelector('form[action*="validateCaptcha"],#captchacharacters'))throw new SourceError('CAPTCHA','أمازون أعاد صفحة تحقق بدل نتائج المنتجات؛ توقف الجلب');
+ if(doc.querySelector('form[name="signIn"],form[action*="/ap/signin"] input[type="password"]'))throw new SourceError('LOGIN_WALL','أمازون طلب تسجيل الدخول؛ الجلب المجاني يقرأ الصفحات العامة فقط');
  return doc;
 }
 export function readBrowserProducts(doc:Document,market:Marketplace):BrowserProduct[]{
  const hits:BrowserProduct[]=[];
- for(const row of doc.querySelectorAll('[data-component-type="s-search-result"][data-asin]')){
-  const asin=row.getAttribute('data-asin')||'';
+ for(const row of doc.querySelectorAll('[data-component-type="s-search-result"][data-asin],.s-result-item[data-asin]')){
+  const asin=(row.getAttribute('data-asin')||'').toUpperCase();
   const titleNode=row.querySelector('h2[aria-label],a.a-text-normal h2,a[href*="/dp/"] h2')||row.querySelector('h2');
   const title=titleNode?.getAttribute('aria-label')||titleNode?.textContent?.trim()||row.querySelector('img.s-image')?.getAttribute('alt')||'';
   if(!/^[A-Z0-9]{10}$/.test(asin)||!title)continue;
@@ -83,7 +99,7 @@ export function readBrowserProducts(doc:Document,market:Marketplace):BrowserProd
   const image=row.querySelector('img.s-image')?.getAttribute('src')||'';
   hits.push({asin,title,ratingsCount:parseRatingsCount(count),url:`https://${markets[market].host}/dp/${asin}`,...(safeMediaUrl(image)?{imageUrl:image}:{})});if(hits.length===100)break;
  }
- if(!hits.length&&!/No results for|لم نعثر|لا توجد نتائج/i.test(doc.body.textContent||''))throw new SourceError('PARSE_EMPTY','لم تظهر نتائج منتجات قابلة للقراءة');
+ if(!hits.length&&!/No results for|لم نعثر|لا توجد نتائج/i.test(doc.body.textContent||''))throw new SourceError('PARSE_EMPTY','أمازون أعاد صفحة بدون بطاقات منتجات قابلة للقراءة؛ تعذر قراءة نتائج البحث، وليس تأكيدًا لعدم وجود المنتج.');
  return [...new Map(hits.map(h=>[h.asin,h])).values()].sort((a,b)=>b.ratingsCount-a.ratingsCount);
 }
 export function readCustomerImages(doc:Document,asin:string,market:Marketplace):ReviewImage[]{
