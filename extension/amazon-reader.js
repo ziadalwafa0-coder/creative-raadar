@@ -26,7 +26,7 @@
   try{if(tab?.click){tab.click();diag.clickedTab=true;await waitFor(hasVideos,4000);}}catch{}
  };
  chrome.runtime.onMessage.addListener((message,sender,respond)=>{
-  if(sender.id!==chrome.runtime.id||!['cr-read-open-product','cr-read-search'].includes(message?.operation))return false;
+  if(sender.id!==chrome.runtime.id||!['cr-read-open-product','cr-read-search','cr-check-public-page'].includes(message?.operation))return false;
   void(async()=>{try{
    const market=location.hostname.replace(/^www\./,'');const asin=location.pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:\/|$)/i)?.[1]?.toUpperCase();
    if(!['amazon.com','amazon.eg','amazon.sa','amazon.ae'].includes(market))throw Error('صفحة غير مسموحة');
@@ -34,6 +34,7 @@
    if(/Robot Check|validateCaptcha|Enter the characters you see|verify.*human|Click the button below to continue shopping/i.test(text)||document.querySelector('form[action*="validateCaptcha"],#captchacharacters')){respond({error:'أمازون يعرض صفحة تحقق؛ لم تُقرأ الصفحة. أكملها بنفسك إن رغبت ثم ارجع للموقع.',code:'CAPTCHA'});return false;}
    if(document.querySelector('form[name="signIn"],input[type="password"]')){respond({error:'هذه صفحة تسجيل دخول؛ لم تُقرأ أي بيانات.',code:'LOGIN_WALL'});return false;}
    if(/Sorry! Something went wrong|Service Unavailable/i.test(document.title+' '+text.slice(0,2000))){respond({error:'أمازون يعرض صفحة غير متاحة؛ توقف البحث دون محاولة أخرى.',code:'BLOCKED'});return;}
+   if(message.operation==='cr-check-public-page'){respond({ok:true,url:location.href});return;}
    if(message.operation==='cr-read-search'){
     if(!/^\/s\/?$/.test(location.pathname))throw Error('الصفحة الحالية ليست نتائج بحث');
     await waitFor(()=>document.querySelector('[data-component-type="s-search-result"][data-asin]')||/No results for|لم نعثر|لا توجد نتائج/i.test(document.body?.innerText||''),7000);

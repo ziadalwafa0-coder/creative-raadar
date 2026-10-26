@@ -146,14 +146,17 @@ export async function searchInBrowser(query:string,market:Marketplace,id:string,
   const result=await request('search',{query,market,page:String(page)},signal);signal.throwIfAborted();
   if(result.page!==undefined&&result.page!==page)throw Error('أعد تحميل الإضافة والصفحة لتفعيل الانتقال الصحيح بين صفحات البحث');
   const {html}=result;
-  const pageProducts=readBrowserProducts(readAmazonDocument(html),market).filter(product=>!visited.has(product.asin));
-  if(!pageProducts.length)break;
+  const hits=readBrowserProducts(readAmazonDocument(html),market);
+  if(!hits.length)break;
+  const pageProducts=hits.filter(product=>!visited.has(product.asin));
+  // A repeated page is not proof that later pages contain no new products.
+  if(!pageProducts.length)continue;
   const products=pageProducts.filter(product=>!acceptProduct||acceptProduct(product));
   products.sort((a,b)=>Number(b.asin===preferredAsin)-Number(a.asin===preferredAsin));
   for(const product of pageProducts)if(!products.includes(product))visited.add(product.asin);
-  const total=visited.size+products.length;
+  const total=inspected+products.length;
   for(let index=0;index<products.length&&(seen.size<limits.videos||seenImages.size<limits.images);index++){
-  signal.throwIfAborted();const product=products[index];visited.add(product.asin);emit({id,type:'progress',index:visited.size,total,asin:product.asin});
+  signal.throwIfAborted();const product=products[index];visited.add(product.asin);emit({id,type:'progress',index:inspected+1,total,asin:product.asin});
   try{
    inspected++;const result=await request('product',{asin:product.asin,market},signal);signal.throwIfAborted();const doc=readAmazonDocument(result.html);
    const blocks=Array.from(doc.querySelectorAll('[data-video-items]'),n=>n.getAttribute('data-video-items')||'');

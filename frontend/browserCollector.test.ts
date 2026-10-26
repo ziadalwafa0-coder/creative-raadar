@@ -116,6 +116,17 @@ test('40 requested videos continue onto page two instead of stopping after 20 pr
  await searchInBrowser('clothes rack','amazon.com','forty',new AbortController().signal,e=>events.push(e),request,{videos:40,images:0});
  assert.equal(events.filter(e=>e.type==='video').length,40);assert.equal(inspected,40);assert.deepEqual(pages,['1','2']);assert.equal(events.at(-1).count,40);
 });
+
+test('a repeated intermediate page does not hide new products on a later page',async()=>{
+ const pages:string[]=[],inspected:string[]=[],events:any[]=[];
+ const request=async(operation:string,p:any)=>{
+  if(operation==='ping')return{pagination:true};
+  if(operation==='search'){pages.push(p.page);return{html:`<html><body><div data-component-type="s-search-result" data-asin="${p.page==='3'?other:asin}"><h2>Shoe rack</h2></div></body></html>`};}
+  inspected.push(p.asin);return{html:productHtml(p.asin,[{creatorType:'customer',productAsin:p.asin,videoURL:media(p.asin===asin?1:2)}])};
+ };
+ await searchInBrowser('shoe rack','amazon.com','repeat-page',new AbortController().signal,e=>events.push(e),request,{videos:2,images:0});
+ assert.deepEqual(pages,['1','2','3']);assert.deepEqual(inspected,[asin,other]);assert.equal(events.filter(e=>e.type==='video').length,2);
+});
 test('customer photos exclude seller pictures, unsafe hosts and mismatched variants',()=>{
  const doc=readAmazonDocument(`<html><body><img src="https://m.media-amazon.com/seller.jpg"><div data-hook="review"><a data-hook="review-title">Good rack</a><img data-hook="review-image-tile" src="https://m.media-amazon.com/customer.jpg"><img data-hook="review-image-tile" src="https://evil.test/a.jpg"></div><div data-hook="review"><a data-hook="format-strip" href="/dp/B000000099"></a><img data-hook="review-image-tile" src="https://m.media-amazon.com/wrong.jpg"></div></body></html>`);
  assert.deepEqual(readCustomerImages(doc,asin,'amazon.com').map(i=>i.url),['https://m.media-amazon.com/customer.jpg']);

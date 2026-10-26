@@ -4,6 +4,15 @@ The user explicitly approved restoring collection through one visible Chrome tab
 
 The soft image hint, run-local search-response sharing, customer-only provenance checks, ASIN isolation, distinct-clip deduplication, temporary results, independent image/video targets and bounded API/download waits remain in place.
 
-Validation: TypeScript and production build pass. All 49 browser/extension tests pass, including single-tab reuse, tab-creation cancellation, stale-result isolation, reader privacy, lazy-media reveal and customer-only video filtering. The ZIP and local installation folder contain matching 1.3.2 runtime files with unchanged permissions.
+Validation: TypeScript and production build pass. All 52 browser/extension tests pass, including single-tab reuse, tab-creation cancellation, worker-restart recovery, owner-tab cleanup, stale-result isolation, repeated intermediate search pages, reader privacy, lazy-media reveal and customer-only video filtering. The ZIP and local installation folder contain matching 1.3.2 runtime files with unchanged permissions.
 
-Live verification is pending. After the installation handoff, the connected Chrome profile Ziad still reported 1.3.1. No collection was started using that obsolete extension. The updated UI has not yet been deployed; production remains on the preceding 1.3.1 revision. A live search, playback and download must be checked before claiming this release solves collection.
+## Live local verification
+
+- A fresh Chrome page confirmed extension 1.3.2. Direct collection from `B0B6ZSSWRL` (Calmootey 9-tier covered shoe rack) returned 3 customer videos and 2 customer photos. The source inventory showed one newly created work tab for that session.
+- A video played with readyState 4 and advancing currentTime. The downloaded MP4 was 42,787,511 bytes; ffprobe verified H.264 video at 480×640, AAC audio and duration 72.864458 seconds. The browser download wait exceeded the automation tool's time limit, but the completed file was independently verified on disk.
+- An Arabic name-plus-photo run (`جزامة 9 دور بغطاء`, requested 40 videos) initially returned 17 customer videos. After fixing premature termination on repeated pages, the same test returned 21 customer videos and completed on search page 5. Image comparison timed out, so the UI correctly discloses that model/image matching is unconfirmed and collection uses name/specification matching. The requested 40 were not obtained; no seller/influencer content was used to fill the count.
+- The progress counter now counts matching products actually inspected, rather than including rejected search cards.
+
+- Idle time between jobs revealed that Chrome can suspend the worker and lose its in-memory tab reference. The patch marks its owned public source tab with a URL fragment, recovers only that tab after suspension, checks its current page before any navigation and closes only its owned source tab when the app tab closes. No cookie or media storage was added. Regression tests cover recovery, challenge refusal after recovery and cleanup without affecting unrelated Amazon tabs. Live verification of the recovery patch remains pending: the installed copy reports 1.3.2 but not the new `tabRecovery` capability. Its Loaded-from path was requested. The core 1.3.2 collector remains compatible and was live-tested successfully.
+
+Production publication is authorized. Production artifact and smoke checks are pending at this commit. These checks do not guarantee a count for every product or establish exact visual matching.
