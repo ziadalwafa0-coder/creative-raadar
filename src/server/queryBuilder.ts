@@ -48,7 +48,22 @@ const STOPWORDS = new Set([
   'pink',
   'brown',
   'beige',
+  'in', 'of', 'to', 'two', 'one', 'product',
 ]);
+
+// Conservative offline fallback, not image recognition. Unknown Arabic names must
+// never degrade into generic ASCII fragments such as "2 1" or "2 in 1".
+function offlineArabicQuery(name: string): string | undefined {
+  const normalized = name.replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
+  if (/(?:مساحه|ممسحه)/.test(normalized)) {
+    return /بخاخ|رش/.test(normalized) ? 'spray mop' : 'floor mop';
+  }
+  return undefined;
+}
+
+function hasSearchIdentity(query: string): boolean {
+  return tokenizeNormalized(query).some(token => /[a-z\u0600-\u06ff]{3}/i.test(token));
+}
 
 const ACCESSORY_PART_KEYWORDS = /\b(?:replacement\s+parts?|spare\s+parts?|disposable\s+paper\s+liners?|parchment\s+paper\s+liners?|refill\s+pack|carrying\s+case\s+only|protective\s+cover\s+only|adapter\s+only|cable\s+only|charger\s+only|mount\s+only|strap\s+only)\b/i;
 
@@ -94,7 +109,7 @@ export async function buildAmazonUsQueries(
     const clean = distillCanonicalSearchQueryFromTitle(
       q.replace(/[\u0600-\u06FF]+/g, ' ').replace(/\s+/g, ' ').trim()
     );
-    if (clean && clean.length >= 3) {
+    if (clean && hasSearchIdentity(clean)) {
       const exists = candidates.some((c) => c.toLowerCase() === clean.toLowerCase());
       if (!exists) candidates.push(clean);
     }
@@ -131,17 +146,16 @@ export async function buildAmazonUsQueries(
       }
       for (const p of prev) addCandidate(p);
     }
+    if (candidates.length === 0) addCandidate(offlineArabicQuery(rawTrimmed));
   }
 
   // 4. If Gemini key is missing or offline during tests, fall back to any ASCII tokens or raw input
   if (candidates.length === 0) {
     const asciiOnly = rawTrimmed.replace(/[^\x20-\x7E]+/g, ' ').replace(/\s+/g, ' ').trim();
-    if (asciiOnly.length >= 3) {
+    if (hasSearchIdentity(asciiOnly)) {
       candidates.push(asciiOnly);
-    } else if (rawTrimmed) {
-      candidates.push(rawTrimmed);
     } else {
-      candidates.push('product');
+      throw new Error('تعذر تحديد اسم المنتج للبحث بدقة. اكتب اسمه بالإنجليزية أو أضف رابط المنتج على أمازون؛ لن نعرض منتجات عشوائية.');
     }
   }
 
@@ -220,31 +234,32 @@ export function evaluateStrictProductTitleMatch(
     };
   }
 
-  const queryTokens = tokenizeNormalized(amazonQuery || rawProductName);
+  const queryTokens = tokenizeNormalized(amazonQuery || rawProductName)
+    .filter(token => /[a-z\u0600-\u06ff]{3}/i.test(token));
   const titleTokens = new Set(tokenizeNormalized(titleClean));
   const titleLower = titleClean.toLowerCase();
 
   if (queryTokens.length === 0) {
     return {
-      approved: true,
-      matchCategory: 'exact_design',
-      matchScore: 85,
-      userFacingLabelAr: 'منتج مطابق',
-      reasonAr: 'تطابق عام مع البحث',
+      approved: false,
+      matchCategory: 'mismatched',
+      matchScore: 0,
+      userFacingLabelAr: 'هوية المنتج غير مؤكدة',
+      reasonAr: 'عبارة البحث لا تحتوي على اسم منتج يمكن مطابقته',
     };
   }
 
   let matchedCount = 0;
   for (const qt of queryTokens) {
-    if (titleTokens.has(qt) || titleLower.includes(qt)) {
+    if (titleTokens.has(qt)) {
       matchedCount++;
     }
   }
 
   const overlapRatio = matchedCount / queryTokens.length;
-  const minRequiredMatches = queryTokens.length <= 2 ? 1 : Math.min(2, Math.ceil(queryTokens.length * 0.35));
+  const minRequiredMatches = Math.min(queryTokens.length, Math.max(2, Math.ceil(queryTokens.length * 0.6)));
 
-  if (matchedCount < minRequiredMatches && overlapRatio < 0.3) {
+  if (matchedCount < minRequiredMatches) {
     return {
       approved: false,
       matchCategory: 'mismatched',

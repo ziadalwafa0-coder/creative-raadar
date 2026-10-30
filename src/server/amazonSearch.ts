@@ -24,7 +24,7 @@ interface QueryCacheEntry {
 }
 
 const QUERY_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour TTL
-const QUERY_CACHE_FILE = path.join(DATA_DIR, 'amazon_query_cache.json');
+const QUERY_CACHE_FILE = path.join(DATA_DIR, 'amazon_query_cache_v2.json');
 const queryCacheMap = new Map<string, QueryCacheEntry>();
 
 function loadQueryCacheFromDisk(): void {

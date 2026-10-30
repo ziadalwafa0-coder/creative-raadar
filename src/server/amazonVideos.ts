@@ -37,7 +37,7 @@ interface AsinVideoCacheEntry {
 }
 
 const ASIN_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours TTL (positive & negative cache)
-const ASIN_CACHE_FILE = path.join(DATA_DIR, 'amazon_asin_videos_cache.json');
+const ASIN_CACHE_FILE = path.join(DATA_DIR, 'amazon_asin_videos_cache_v2.json');
 const asinVideoCache = new Map<string, AsinVideoCacheEntry>();
 
 function loadAsinCacheFromDisk(): void {
@@ -194,12 +194,6 @@ export function parseAmazonUsVideosFromHtml(
   const targetAsin = extractAsinFromUrl(pageUrl);
   const results: ExtractedAmazonVideo[] = [];
   const seenUuids = new Set<string>();
-  const allowedAsinFamily = new Set<string>();
-  if (targetAsin) allowedAsinFamily.add(targetAsin.toUpperCase());
-
-  for (const pm of html.matchAll(/"parentAsin"\s*:\s*"([B0-9][A-Z0-9]{9})"/gi)) {
-    allowedAsinFamily.add(pm[1].toUpperCase());
-  }
 
   const pushCandidate = (item: {
     videoUrl: string;
@@ -220,20 +214,23 @@ export function parseAmazonUsVideosFromHtml(
     const segLower = (item.segmentName || '').toLowerCase();
     if (segLower.includes('related product') || segLower.includes('other product')) return;
 
-    const relatedList = (item.relatedAsins || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+    const relatedList: string[] = (item.relatedAsins || '').toUpperCase().match(/\b[B0-9][A-Z0-9]{9}\b/g) || [];
     if (relatedList.length > 2) return;
 
     const vAsin = (item.productAsin || '').trim().toUpperCase();
-    const vParent = (item.parentAsin || '').trim().toUpperCase();
-    if (vParent) allowedAsinFamily.add(vParent);
-    if (targetAsin && vAsin && !allowedAsinFamily.has(vAsin) && vParent !== targetAsin) return;
+    // A recommendation must not expand the allowed product family for the rest
+    // of the page. Require an explicit connection to the inspected product.
+    if (!targetAsin) return;
+    if (vAsin && vAsin !== targetAsin) return;
+    if (relatedList.length && !relatedList.includes(targetAsin)) return;
+    if (!vAsin && !relatedList.includes(targetAsin) && !item.isCustomerSection) return;
 
     const cType = (item.creatorType || '').toLowerCase();
     const hasCustomerReviewLink = /customer-reviews|review/i.test(item.reviewLink || '');
     const isSellerOrInfluencer = ['seller', 'vendor', 'brand', 'manufacturer', 'influencer'].includes(cType);
-    if (isSellerOrInfluencer && !hasCustomerReviewLink) return;
+    if (isSellerOrInfluencer) return;
 
-    const isCustomer = cType === 'customer' || hasCustomerReviewLink || Boolean(item.isCustomerSection) || !cType;
+    const isCustomer = cType === 'customer' || hasCustomerReviewLink || Boolean(item.isCustomerSection);
     if (!isCustomer) return;
 
     const streamUuid = extractStreamUuid(rawUrl);
@@ -299,11 +296,25 @@ export function parseAmazonUsVideosFromHtml(
     }
   }
 
-  const reviewBlockRegex = /id="customer_review-([A-Z0-9]+)"([\s\S]*?)(?=id="customer_review-[A-Z0-9]+"|<div[^>]+id="cm_cr-pagination|$)/gi;
+  const reviewBlockRegex = /<div\b[^>]*\bid="customer_review-([A-Z0-9]+)"[^>]*>/gi;
   let revBlockMatch: RegExpExecArray | null;
   while ((revBlockMatch = reviewBlockRegex.exec(html)) !== null) {
     const reviewId = revBlockMatch[1];
-    const block = revBlockMatch[2];
+    // Bound the last review to its actual closing element, not the page footer
+    // (which may contain videos for completely unrelated recommendations).
+    const bodyStart = reviewBlockRegex.lastIndex;
+    const divTags = /<\/?div\b[^>]*>/gi;
+    divTags.lastIndex = bodyStart;
+    let depth = 1;
+    let closeAt = -1;
+    let divTag: RegExpExecArray | null;
+    while ((divTag = divTags.exec(html)) !== null) {
+      depth += /^<\/div/i.test(divTag[0]) ? -1 : 1;
+      if (depth === 0) { closeAt = divTag.index; break; }
+    }
+    if (closeAt < 0) continue;
+    const block = html.slice(bodyStart, closeAt);
+    reviewBlockRegex.lastIndex = divTags.lastIndex;
     const urlMatches = block.matchAll(
       /(https?:\/\/m\.media-amazon\.com\/images\/S\/vse-vms-transcoding-artifact[^"'\s\\]+\.(?:m3u8|mp4))/gi
     );

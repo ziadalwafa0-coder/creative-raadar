@@ -529,6 +529,14 @@ export async function handleStreamSearch(
     timestamp: new Date().toISOString(),
   });
 
+  if (rawReferenceImage && !isGeminiConfigured()) {
+    sendEvent({
+      type: 'warning', searchId, code: 'IMAGE_ANALYSIS_UNAVAILABLE',
+      message: 'مطابقة الصورة غير متاحة حاليًا؛ البحث يعتمد على اسم المنتج فقط، ولا يؤكد تطابق الشكل بالصورة.',
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   const seenStreamUuids = new Set<string>();
   const seenMediaUrls = new Set<string>();
   const seenAsins = new Set<string>();
