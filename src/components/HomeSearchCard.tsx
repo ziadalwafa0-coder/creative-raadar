@@ -181,7 +181,9 @@ export const HomeSearchCard: React.FC = () => {
         controller.signal.throwIfAborted();
         if (!response.ok) throw new Error(data.error || 'تعذر قراءة صور نتائج أمازون.');
         const products: IdentityCandidate[] = data.products || [];
-        if (!products.length) throw new Error('لم نجد منتجات قابلة للمقارنة. عدّل اسم البحث التجاري أو أضف رابط المنتج.');
+        if (!products.length) throw new Error(data.verification === 'gemini'
+          ? 'لم نجد منتجًا بتطابق بصري كافٍ. جرّب صورة أوضح أو عدّل اسم البحث أو أضف رابط نفس المنتج.'
+          : 'لم نجد منتجات قابلة للمقارنة. عدّل اسم البحث التجاري أو أضف رابط المنتج.');
         let approved: IdentityCandidate | undefined;
         try {
           const scores = data.verification === 'gemini'

@@ -70,5 +70,7 @@ export async function handleProductCandidates(req: Request, res: Response): Prom
     verification = decisions ? 'gemini' : 'unavailable';
     approvedAsins = profile?.confidence === 'low' ? [] : products.filter(product => decisions?.get(product.asin)?.approved).map(product => product.asin);
   }
-  if (!controller.signal.aborted) res.json({ query, products, verification, approvedAsins });
+  // A completed visual rejection must not reappear as a manual "same product" card.
+  const visibleProducts = verification === 'gemini' ? products.filter(product => approvedAsins.includes(product.asin)) : products;
+  if (!controller.signal.aborted) res.json({ query, products:visibleProducts, verification, approvedAsins });
 }
