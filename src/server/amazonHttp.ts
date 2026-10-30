@@ -1,6 +1,7 @@
 import { Agent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import { SCRAPER_PROXY_URL, SCRAPER_API_KEY } from './config.ts';
 import { isSafeExternalUrl } from '../utils/security.server.ts';
+import { fetchWithScrapling, isScraplingAmazonUrl, scraplingEnabled } from './scrapling.ts';
 
 /**
  * Shared undici Agent with keep-alive and connection pool for all Amazon HTTP requests.
@@ -198,6 +199,24 @@ export async function fetchAmazonHtml(
 
   const timeoutMs = options.timeoutMs ?? 8000;
   const minHtmlChars = options.minHtmlChars ?? 5000;
+
+  if (scraplingEnabled() && isScraplingAmazonUrl(url)) {
+    let response: { status: number; html: string } | undefined;
+    try {
+      response = await fetchWithScrapling(url, { signal: options.signal, timeoutMs });
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      // An unavailable Python runtime must not silently claim Scrapling worked.
+      console.warn('[Scrapling] HTTP fetch unavailable; using existing HTTP transport');
+    }
+    if (response) {
+      const check = detectAmazonBlock(response.status, response.html, minHtmlChars);
+      if (check.blocked || response.status < 200 || response.status >= 400) {
+        throw new AmazonBlockError(url, response.status, check.reason || `HTTP ${response.status}`);
+      }
+      return response.html;
+    }
+  }
 
   const attemptFetch = async (
     targetUrl: string,

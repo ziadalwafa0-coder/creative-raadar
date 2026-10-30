@@ -16,6 +16,7 @@ import { ProviderRegistry } from './src/server/connectors/ProviderRegistry.ts';
 import { analyzeProductImage, isGeminiConfigured } from './src/server/gemini.ts';
 import { streamExportArchive } from './src/server/exporter.ts';
 import { isFfmpegAvailable } from './src/server/downloader.ts';
+import { getScraplingStatus } from './src/server/scrapling.ts';
 import type { Project, SearchSettings } from './src/types/index.ts';
 import {
   verifyAccessCode,
@@ -156,7 +157,7 @@ app.get('/api/health', async (_req: Request, res: Response) => {
   } catch {
     amazonReachable = false;
   }
-  res.json({ gemini, ffmpeg, amazonReachable });
+  res.json({ gemini, ffmpeg, amazonReachable, scrapling: getScraplingStatus() });
 });
 
 // -------------------------------------------------------------

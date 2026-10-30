@@ -11,3 +11,6 @@ coverage/
 
 .aistudio/
 .vercel/
+.venv*/
+__pycache__/
+*.pyc
