@@ -28,6 +28,12 @@ const clean = (value: unknown, limit = 160) => typeof value === 'string' ? value
 const list = (value: unknown) => Array.isArray(value) ? value.map(x => clean(x, 120)).filter(Boolean).slice(0, 12) : [];
 const knownText = (value: string) => !/^(?:unknown|none|n\/a|not visible|unbranded|generic|غير معروف|غير واضح)$/i.test(value);
 
+export function parseReferenceImage(value: unknown) {
+  if (typeof value !== 'string' || value.length > 6 * 1024 * 1024) return null;
+  const match = value.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\r\n]+)$/);
+  return match && match[2].length >= 64 ? {mimeType: match[1], base64: match[2]} : null;
+}
+
 export function normalizeProductProfile(raw: unknown): VisualAttribute {
   if (!raw || typeof raw !== 'object') throw new Error('Invalid image identity');
   const data = raw as Record<string, any>;
@@ -45,6 +51,6 @@ export function normalizeProductProfile(raw: unknown): VisualAttribute {
     visibleAccessories: list(data.visibleAccessories), mechanism: clean(data.mechanism, 300),
     mustMatchAttributes: list(data.mustMatchAttributes), allowedDifferences: list(data.allowedDifferences),
     unknownAttributes: list(data.unknownAttributes), confidence: ['high','medium','low'].includes(data.confidence) ? data.confidence : 'low',
-    multilingualQueries: {ar: list(data.multilingualQueries?.ar), en: [commercialNameEn]},
+    multilingualQueries: {ar: list(data.multilingualQueries?.ar), en: [...new Set([commercialNameEn,...list(data.multilingualQueries?.en).filter(query=>/[a-z]{3}/i.test(query) && !/[\u0600-\u06ff]/.test(query))])].slice(0,3)},
   };
 }

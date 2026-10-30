@@ -11,7 +11,6 @@ export const HomeSearchCard: React.FC = () => {
   const {
     setCurrentProject,
     setActiveTab,
-    showToast,
     apiFetch,
     droppedFile,
     setDroppedFile,
@@ -182,9 +181,13 @@ export const HomeSearchCard: React.FC = () => {
         controller.signal.throwIfAborted();
         if (!response.ok) throw new Error(data.error || 'تعذر قراءة صور نتائج أمازون.');
         const products: IdentityCandidate[] = data.products || [];
-        if (!products.length) throw new Error(data.verification === 'gemini'
-          ? 'لم نجد منتجًا بتطابق بصري كافٍ. جرّب صورة أوضح أو عدّل اسم البحث أو أضف رابط نفس المنتج.'
-          : 'لم نجد منتجات قابلة للمقارنة. عدّل اسم البحث التجاري أو أضف رابط المنتج.');
+        if (!products.length) throw new Error(data.diagnostics?.reason === 'REFERENCE_UNCERTAIN'
+          ? 'تحليل الصورة غير حاسم. جرّب لقطة أوضح للمنتج أو أضف رابط صفحته للتأكيد.'
+          : data.diagnostics?.sourceIncomplete
+          ? 'تعذر قراءة صور بعض النتائج؛ لم نتمكن من تأكيد المطابقة. أعد المحاولة أو أضف رابط نفس المنتج.'
+          : data.diagnostics?.reason === 'NO_READABLE_PRODUCTS'
+          ? 'لم تظهر نتائج منتجات قابلة للفحص بالأسماء المستخدمة. عدّل اسم البحث التجاري أو أضف رابط نفس المنتج.'
+          : `لم نؤكد تطابقًا ضمن ${data.diagnostics?.checkedCount || 0} صورة تم فحصها. جرّب اسمًا أدق أو أضف رابط نفس المنتج؛ هذا لا يعني أنه غير موجود على أمازون.`);
         let approved: IdentityCandidate | undefined;
         try {
           const scores = data.verification === 'gemini'
@@ -222,7 +225,6 @@ export const HomeSearchCard: React.FC = () => {
       if (error?.name !== 'AbortError') {
         const message = error.message || 'حدث خطأ أثناء بدء البحث';
         setValidationError(message); setScanProgress('توقّف البحث قبل اختيار المنتج؛ لم نستخدم نتائج غير مؤكدة.');
-        showToast(message, 'error');
       }
     } finally {
       setIsSubmitting(false);

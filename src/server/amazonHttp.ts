@@ -316,6 +316,17 @@ export async function fetchAmazonHtml(
   throw new AmazonBlockError(url, lastStatus || 503, lastBlockReason || 'Blocked by Amazon');
 }
 
+export function productComparisonImageUrl(imageUrl:string):string {
+  try {
+    const url=new URL(imageUrl);
+    if(url.protocol==='https:' && url.hostname==='m.media-amazon.com' && url.pathname.startsWith('/images/I/')) {
+      url.pathname=url.pathname.replace(/\._[A-Z0-9,_-]+_\.(jpg|jpeg|png|webp)$/i,'._SL800_.$1');
+      return url.href;
+    }
+  } catch { /* The caller validates source URLs. */ }
+  return imageUrl;
+}
+
 export async function fetchProductImageAsBase64(
   imageUrl?: string,
   signal?: AbortSignal
@@ -324,15 +335,16 @@ export async function fetchProductImageAsBase64(
   try {
     const timeoutSig = AbortSignal.timeout(4000);
     const combinedSig = signal ? AbortSignal.any([signal, timeoutSig]) : timeoutSig;
-    const res = await undiciFetch(imageUrl, {
+    for (const target of new Set([productComparisonImageUrl(imageUrl),imageUrl])) {
+    const res = await undiciFetch(target, {
       headers: {
         'User-Agent': AMAZON_CHROME_USER_AGENT,
-        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8',
       },
       dispatcher: amazonUndiciAgent,
       signal: combinedSig,
     });
-    if (!res.ok) return null;
+    if (!res.ok) { await res.body?.cancel(); continue; }
     const mimeType = res.headers.get('content-type') || 'image/jpeg';
     if (!mimeType.startsWith('image/')) return null;
     const arrayBuffer = await res.arrayBuffer();
@@ -341,6 +353,8 @@ export async function fetchProductImageAsBase64(
       base64: Buffer.from(arrayBuffer).toString('base64'),
       mimeType,
     };
+    }
+    return null;
   } catch (err: unknown) {
     console.warn(`[AmazonHttp] Failed to fetch image ${imageUrl}:`, (err as Error)?.message || err);
     return null;

@@ -2,8 +2,7 @@ import {fetchAmazonSearchPage, type AmazonUsProductCandidate} from './amazonSear
 import {fetchProductImageAsBase64} from './amazonHttp.ts';
 import {evaluateStrictProductTitleMatch} from './queryBuilder.ts';
 import {isGeminiConfigured, verifyAmazonProductsBatchVisually, type ProductMatchVerdict} from './gemini.ts';
-import {normalizeProductProfile} from './productProfile.ts';
-import {parseReferenceImage} from './productCandidates.ts';
+import {normalizeProductProfile,parseReferenceImage} from './productProfile.ts';
 
 const services={search:fetchAmazonSearchPage,picture:fetchProductImageAsBase64,verify:verifyAmazonProductsBatchVisually,ready:isGeminiConfigured};
 
