@@ -37,7 +37,7 @@ interface AsinVideoCacheEntry {
 }
 
 const ASIN_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours TTL (positive & negative cache)
-const ASIN_CACHE_FILE = path.join(DATA_DIR, 'amazon_asin_videos_cache_v2.json');
+const ASIN_CACHE_FILE = path.join(DATA_DIR, 'amazon_asin_videos_cache_v3.json');
 const asinVideoCache = new Map<string, AsinVideoCacheEntry>();
 
 function loadAsinCacheFromDisk(): void {
@@ -226,11 +226,11 @@ export function parseAmazonUsVideosFromHtml(
     if (!vAsin && !relatedList.includes(targetAsin) && !item.isCustomerSection) return;
 
     const cType = (item.creatorType || '').toLowerCase();
-    const hasCustomerReviewLink = /customer-reviews|review/i.test(item.reviewLink || '');
+    const hasCustomerReviewLink = /\/(?:gp\/)?customer-reviews\/[A-Z0-9]+(?:[/?#]|$)/i.test(item.reviewLink || '');
     const isSellerOrInfluencer = ['seller', 'vendor', 'brand', 'manufacturer', 'influencer'].includes(cType);
     if (isSellerOrInfluencer) return;
 
-    const isCustomer = cType === 'customer' || hasCustomerReviewLink || Boolean(item.isCustomerSection);
+    const isCustomer = hasCustomerReviewLink || Boolean(item.isCustomerSection);
     if (!isCustomer) return;
 
     const streamUuid = extractStreamUuid(rawUrl);

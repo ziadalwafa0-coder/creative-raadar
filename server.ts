@@ -17,6 +17,7 @@ import { analyzeProductImage, isGeminiConfigured } from './src/server/gemini.ts'
 import { streamExportArchive } from './src/server/exporter.ts';
 import { isFfmpegAvailable } from './src/server/downloader.ts';
 import { getScraplingStatus } from './src/server/scrapling.ts';
+import { handleProductCandidates, handleProductImageAnalysis } from './src/server/productCandidates.ts';
 import type { Project, SearchSettings } from './src/types/index.ts';
 import {
   verifyAccessCode,
@@ -102,6 +103,7 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
 const uploadJsonParser = express.json({ limit: '25mb' });
 app.use('/api/stream-search', uploadJsonParser);
 app.use('/api/projects', uploadJsonParser);
+app.use('/api/product-identity', uploadJsonParser);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -293,6 +295,18 @@ app.post('/api/stream-search', requireAuth, (req: Request, res: Response) => {
     if (!res.headersSent) {
       res.status(500).json({ error: 'Internal streaming search error' });
     }
+  });
+});
+
+app.post('/api/product-identity/candidates', requireAuth, (req: Request, res: Response) => {
+  handleProductCandidates(req, res).catch(error => {
+    if (!res.headersSent && !res.destroyed) res.status(502).json({ error: error?.code === 'AMAZON_BLOCKED' ? 'أمازون لم يسمح بقراءة نتائج البحث الآن.' : 'تعذر تحميل صور المنتجات للمقارنة؛ لم يبدأ جمع الفيديوهات.' });
+  });
+});
+
+app.post('/api/product-identity/analyze', requireAuth, (req: Request, res: Response) => {
+  handleProductImageAnalysis(req, res).catch(error => {
+    if (!res.headersSent && !res.destroyed) res.status(503).json({code:'IMAGE_ANALYSIS_UNAVAILABLE', error:'تعذر تحليل الصورة باستخدام Gemini الآن. التحليل المحلي المجاني متاح كبديل.'});
   });
 });
 

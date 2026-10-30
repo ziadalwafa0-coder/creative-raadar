@@ -548,6 +548,9 @@ export async function handleStreamSearch(
   let totalProductsDiscovered = 0;
 
   try {
+    if (rawReferenceImage && !isGeminiConfigured() && !rawProductUrl) {
+      throw new Error('حدّد المنتج أولًا بتحليل الصورة المحلي أو أضف رابط صفحته. لن نكمل البحث بالاسم وحده مع تجاهل الصورة.');
+    }
     const linkCandidate =
       rawProductUrl ||
       (/^https?:\/\//i.test(rawProductName) || /\b(?:\/dp\/|B0[A-Z0-9]{8})\b/i.test(rawProductName)
@@ -620,7 +623,9 @@ export async function handleStreamSearch(
       rawProductName;
 
     const finalQueries =
-      initialQueries && !resolvedImageProfile && !resolvedLinkIdentity
+      resolvedLinkIdentity?.directAmazonUsUrl
+        ? { primaryQuery: resolvedLinkIdentity.extractedTitle || searchProductName, variants: [] }
+        : initialQueries && !resolvedImageProfile && !resolvedLinkIdentity
         ? initialQueries
         : await buildAmazonUsQueries(
             searchProductName,
@@ -632,12 +637,15 @@ export async function handleStreamSearch(
             abortController.signal
           );
 
-    const topVariants = finalQueries.variants.slice(0, 2);
+    // A selected product URL is a scope boundary, not a seed for unrelated listings.
+    const topVariants = resolvedLinkIdentity?.directAmazonUsUrl ? [] : finalQueries.variants.slice(0, 2);
 
     sendEvent({
       type: 'progress',
       searchId,
-      message: `جاري البحث في أمازون أمريكا عن: "${finalQueries.primaryQuery}" وفتح المنتجات الأعلى تقييماً أولاً...`,
+      message: resolvedLinkIdentity?.directAmazonUsUrl
+        ? 'تم تحديد صفحة المنتج؛ نجمع مراجعات هذه الصفحة فقط دون التوسع لمنتجات أخرى.'
+        : `جاري البحث في أمازون أمريكا عن: "${finalQueries.primaryQuery}" مع إعطاء دقة التطابق الأولوية...`,
       foundCount: 0,
       resolvedProductName: displayArabicName,
       timestamp: new Date().toISOString(),
@@ -685,9 +693,9 @@ export async function handleStreamSearch(
 
       if (added > 0) {
         workQueue.sort((a, b) => {
-          const ratingDiff = (b.page.ratingCount || 0) - (a.page.ratingCount || 0);
-          if (ratingDiff !== 0) return ratingDiff;
-          return (b.titleVerdict.matchScore || 0) - (a.titleVerdict.matchScore || 0);
+          const matchDiff = (b.titleVerdict.matchScore || 0) - (a.titleVerdict.matchScore || 0);
+          if (matchDiff !== 0) return matchDiff;
+          return (b.page.ratingCount || 0) - (a.page.ratingCount || 0);
         });
         notifyQueueListeners();
       }

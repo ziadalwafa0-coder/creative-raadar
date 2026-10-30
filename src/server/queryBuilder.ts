@@ -223,7 +223,28 @@ export function evaluateStrictProductTitleMatch(
   }
 
   const queryCombined = `${amazonQuery || ''} ${rawProductName || ''}`.trim();
+  const models = queryCombined.match(/\b[a-z]{1,5}-?\d{3,}[a-z\d-]*\b/gi) || [];
+  if (models.some(model => !titleClean.toLowerCase().replace(/[^a-z\d]/g, '').includes(model.toLowerCase().replace(/[^a-z\d]/g, '')))) {
+    return { approved: false, matchCategory: 'mismatched', matchScore: 0, userFacingLabelAr: 'موديل مختلف', reasonAr: 'رقم الموديل المكتوب غير موجود في عنوان النتيجة' };
+  }
+  const normalizeDigits = (text: string) => text.replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+  const wantedTiers = normalizeDigits(queryCombined).match(/\b(\d+)\s*(?:[- ]?tiers?|layers?|shelves|دور|ادوار|أدوار|طوابق)\b/i)?.[1];
+  const offeredTiers = normalizeDigits(titleClean).match(/\b(\d+)\s*[- ]?(?:tiers?|layers?|shelves)\b/i)?.[1];
+  if (wantedTiers && offeredTiers && wantedTiers !== offeredTiers) {
+    return { approved: false, matchCategory: 'mismatched', matchScore: 0, userFacingLabelAr: 'مواصفات مختلفة', reasonAr: 'عدد الأدوار في المنتج مختلف عن المطلوب' };
+  }
   const searchingForAccessory = ACCESSORY_PART_KEYWORDS.test(queryCombined);
+  const productAnchors = [
+    /\bmops?\b/i, /\bvacuum\b/i, /\bflosser\b/i, /\bblender\b/i,
+    /\bchainsaw\b/i, /\bdrill\b/i, /\bcompressor\b/i, /\bsteamer\b/i,
+    /\btoothbrush\b/i, /\bheater\b/i, /\bshoe\b/i, /\bpillowcase\b/i,
+  ];
+  const missingProductType = productAnchors.some(anchor => anchor.test(amazonQuery) && !anchor.test(titleClean));
+  const primaryTitle = titleClean.split(/\b(?:with|includes?|including)\b|[,;|]/i)[0];
+  const accessoryOnly = /\breplacement\s+(?:bottles?|pads?|heads?|filters?|brushes?)\b/i.test(primaryTitle);
+  if (missingProductType || (!searchingForAccessory && accessoryOnly)) {
+    return { approved: false, matchCategory: 'mismatched', matchScore: 0, userFacingLabelAr: 'نوع منتج مختلف أو قطعة غيار', reasonAr: 'اسم المنتج الأساسي غير موجود أو النتيجة قطعة غيار فقط' };
+  }
   if (!searchingForAccessory && ACCESSORY_PART_KEYWORDS.test(titleClean)) {
     return {
       approved: false,
@@ -270,14 +291,14 @@ export function evaluateStrictProductTitleMatch(
   }
 
   const score = Math.min(99, Math.max(65, Math.round(55 + overlapRatio * 44)));
-  const category = overlapRatio >= 0.6 ? 'exact_design' : 'permitted_variation';
+  const category = 'permitted_variation';
 
   return {
     approved: true,
     matchCategory: category,
     matchScore: score,
-    userFacingLabelAr: category === 'exact_design' ? 'نفس التصميم' : 'منتج مشابه مطابق',
-    reasonAr: 'تطابق مع مواصفات واسم المنتج المطلوب',
+    userFacingLabelAr: 'مطابقة اسم مبدئية؛ الشكل غير مؤكد',
+    reasonAr: 'الاسم مناسب للبحث؛ مطابقة التصميم تتطلب مقارنة الصورة أو تأكيد المنتج',
   };
 }
 

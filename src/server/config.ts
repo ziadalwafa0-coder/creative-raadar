@@ -1,7 +1,7 @@
 import path from 'node:path';
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({path: ['.env.local', '.env'], quiet: true});
 
 const DEFAULT_ACCESS_CODE_DIGESTS = [
   '49df6742a19cfb94d2b217ed78283e8bc9829e7c8e435eeb7982dd8badb85805',
@@ -54,7 +54,7 @@ export const MAX_CACHE_BYTES = Math.floor(MAX_CACHE_GB * 1024 * 1024 * 1024);
 
 export const GEMINI_MODELS: readonly string[] = process.env.GEMINI_MODELS
   ? process.env.GEMINI_MODELS.split(',').map((m) => m.trim()).filter(Boolean)
-  : ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash'];
+  : ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
 
 export function assertProductionConfig(): void {
   if (IS_PROD && !process.env.CREATIVE_RADAAR_PEPPER?.trim()) {

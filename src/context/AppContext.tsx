@@ -41,6 +41,7 @@ interface AppContextType {
     targetVideoCount: number;
     targetPhotoCount: number;
     referenceImage?: string | null;
+    imageConfirmedLocally?: boolean;
   }) => Promise<void>;
   cancelStreamingSearch: () => void;
   sessionId: string;
@@ -205,6 +206,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     targetVideoCount: number;
     targetPhotoCount: number;
     referenceImage?: string | null;
+    imageConfirmedLocally?: boolean;
   }) => {
     // 1. Cancel any previous streaming search and clear previous results
     if (streamReaderRef.current) {
@@ -284,7 +286,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         {
           timestamp: new Date().toISOString(),
           stage: 'searching',
-          message: params.referenceImage
+          message: params.imageConfirmedLocally
+            ? 'تم تأكيد صفحة المنتج؛ جاري جمع مراجعاتها فقط.'
+            : params.referenceImage
             ? 'جاري رفع صورة المنتج وفحص تصميمه ومواصفاته بالذكاء الاصطناعي...'
             : sourcePlatform === 'tiktok'
             ? 'جاري بدء البحث المباشر في فيديوهات تيك توك (TikTok)...'
@@ -314,7 +318,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           targetVideoCount: effectiveVideoTarget,
           targetPhotoCount: effectivePhotoTarget,
           hasReferenceImage: Boolean(params.referenceImage),
-          referenceImage: params.referenceImage || undefined,
+          referenceImage: params.imageConfirmedLocally ? undefined : params.referenceImage || undefined,
         }),
       });
 

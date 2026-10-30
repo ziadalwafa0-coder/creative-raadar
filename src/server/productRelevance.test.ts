@@ -45,6 +45,7 @@ test('foreign parents cannot poison the allowlist, and unbound items are exclude
     { videoURL: media('foreign-parent'), creatorType: 'Customer', productAsin: foreign, parentAsin: foreign },
     { videoURL: media('foreign-child'), creatorType: 'Customer', productAsin: foreign, parentAsin: target },
     { videoURL: media('unbound-review'), creatorType: 'Customer', fullReviewLink: '/gp/customer-reviews/RUNBOUND' },
+    { videoURL: media('unlinked-demo'), creatorType: 'Customer', productAsin: target, title: 'Set up and demo' },
     { videoURL: media('seller-review'), creatorType: 'Seller', productAsin: target, fullReviewLink: '/gp/customer-reviews/RSELLER' },
   ]), url);
   assert.equal(parsed.length, 0);

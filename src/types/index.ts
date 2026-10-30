@@ -48,6 +48,7 @@ export interface VisualAttribute {
   category: string;
   suggestedNameAr: string;
   suggestedNameEn: string;
+  commercialNameEn?: string;
   brandOrModelText: string[];
   distinctiveGeometry: string;
   components: string[];

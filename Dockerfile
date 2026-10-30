@@ -10,7 +10,7 @@ RUN python3 -m venv /opt/scrapling \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --include=dev --no-audit --no-fund
+RUN npm ci --include=dev --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build
 
