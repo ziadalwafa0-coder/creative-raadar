@@ -345,7 +345,7 @@ export function parseAmazonUsVideosFromHtml(
 export async function fetchAmazonUsProductVideos(
   productUrlOrAsin: string,
   signal?: AbortSignal,
-  options: {limit?:number; onVideo?:(video:ExtractedAmazonVideo)=>void; onLimited?:(reason:string)=>void; fetchHtml?:typeof fetchAmazonHtml} = {}
+  options: {limit?:number; excludeStreamUuids?:Set<string>; shouldStop?:()=>boolean; onVideo?:(video:ExtractedAmazonVideo)=>void; onLimited?:(reason:string)=>void; fetchHtml?:typeof fetchAmazonHtml} = {}
 ): Promise<ExtractedAmazonVideo[]> {
   const asin = extractAsinFromUrl(productUrlOrAsin) || productUrlOrAsin.trim().toUpperCase();
   const isAsinValid = /^[B0-9][A-Z0-9]{9}$/.test(asin);
@@ -356,8 +356,9 @@ export async function fetchAmazonUsProductVideos(
 
   if (isAsinValid) {
     const cached = asinVideoCache.get(asin);
-    if (!options.fetchHtml && cached && cached.expiresAt > now && (cached.videos.length >= limit || cached.exhausted)) {
-      const videos = cached.videos.slice(0,limit);
+    const available=cached?.videos.filter(video=>!options.excludeStreamUuids?.has(video.streamUuid)) || [];
+    if (!options.fetchHtml && cached && cached.expiresAt > now && (available.length >= limit || cached.exhausted)) {
+      const videos = available.slice(0,limit);
       videos.forEach(video=>options.onVideo?.(video));
       return videos;
     }
@@ -395,13 +396,14 @@ export async function fetchAmazonUsProductVideos(
   }
   const delivered = new Set<string>();
   const deliver = async () => {
-    const fresh = Array.from(mergedByUuid.values()).filter(video=>!delivered.has(video.streamUuid)).slice(0,limit-delivered.size);
-    for (let i = 0; i < fresh.length; i += 6) {
+    while(delivered.size<limit && !options.shouldStop?.()) {
+      const slice = Array.from(mergedByUuid.values()).filter(video=>!delivered.has(video.streamUuid) && !options.excludeStreamUuids?.has(video.streamUuid)).slice(0,Math.min(6,limit-delivered.size));
+      if (!slice.length) break;
       signal?.throwIfAborted();
-      const slice = fresh.slice(i,i+6);
     await Promise.all(
       slice.map(async (v) => {
         if (!options.fetchHtml) v.downloadUrl = await resolveBestVideoDownloadUrl(v.mediaUrl, signal);
+        if (options.excludeStreamUuids?.has(v.streamUuid)) return;
         delivered.add(v.streamUuid); options.onVideo?.(v);
       })
     );
@@ -412,7 +414,7 @@ export async function fetchAmazonUsProductVideos(
   let exhausted = Boolean(reviewsHtml) && !nextAmazonReviewPage(reviewsHtml,dpUrl,asin);
   let html = reviewsHtml;
   const visited = new Set<string>();
-  for (let page = 1; html && delivered.size < limit && page < 10; page++) {
+  for (let page = 1; html && delivered.size < limit && !options.shouldStop?.() && page < 10; page++) {
     signal?.throwIfAborted();
     const next = nextAmazonReviewPage(html, dpUrl, asin);
     if (!next) break;
@@ -427,7 +429,7 @@ export async function fetchAmazonUsProductVideos(
       await deliver(); exhausted=!nextAmazonReviewPage(html,dpUrl,asin);
     } catch (error) { signal?.throwIfAborted(); options.onLimited?.(error instanceof Error ? error.message : 'تعذر فتح صفحة الريفيوهات التالية'); break; }
   }
-  const merged = Array.from(mergedByUuid.values()).slice(0,limit);
+  const merged = Array.from(mergedByUuid.values());
 
   if (isAsinValid && !signal?.aborted && !options.fetchHtml) {
     asinVideoCache.set(asin, {
@@ -441,7 +443,7 @@ export async function fetchAmazonUsProductVideos(
     saveAsinCacheToDisk();
   }
 
-  return merged;
+  return merged.filter(video=>delivered.has(video.streamUuid)).slice(0,limit);
 }
 
 export function nextAmazonReviewPage(html:string, baseUrl:string, asin:string):string | null {

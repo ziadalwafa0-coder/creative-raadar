@@ -814,6 +814,7 @@ export async function handleStreamSearch(
           try {
             const videos = await fetchAmazonUsProductVideos(page.url, abortController.signal, {
               limit:targetVideoCount-foundVideos,
+              excludeStreamUuids:seenStreamUuids, shouldStop:isGoalReached,
               onVideo:video=>emitVideo(video,page,titleVerdict),
               onLimited:()=>{ reviewAccessLimited=true; },
             });

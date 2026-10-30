@@ -32,6 +32,12 @@ test('sign-in is an access restriction rather than an exhausted review list',()=
   assert.equal(detectAmazonBlock(200,'<title dir="ltr">Sign in</title><form id="ap_login_form">'+' '.repeat(5000)).blocked,true);
 });
 
+test('reviews already emitted by another listing do not consume the remaining requested count',async()=>{
+  const seen=new Set(['stream000001']);
+  const videos=await fetchAmazonUsProductVideos(asin,undefined,{limit:2,excludeStreamUuids:seen,onVideo:video=>seen.add(video.streamUuid),fetchHtml:async url=>url.includes('product-reviews') ? review(3) : review(1)+review(2)});
+  assert.deepEqual(videos.map(video=>video.streamUuid).sort(),['stream000002','stream000003']);
+});
+
 test('extra listings require image evidence and a server visual approval; client approvals are ignored',async()=>{
   const approved='B011111111',rejected='B022222222';
   let verificationCalls=0;
