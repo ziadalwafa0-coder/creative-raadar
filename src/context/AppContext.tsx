@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Language, translations } from '../translations/index.ts';
 import { Project, CandidateAsset, ProviderCapability, WorkspaceUsage } from '../types/index.ts';
+import {analyzeImageWithGemini, prepareIdentityImage} from '../utils/geminiIdentity.ts';
 
 export type NavTab = 'search' | 'projects' | 'library' | 'integrations' | 'usage' | 'settings';
 
@@ -42,6 +43,7 @@ interface AppContextType {
     targetPhotoCount: number;
     referenceImage?: string | null;
     imageConfirmedLocally?: boolean;
+    verifiedExpansion?: Project['verifiedExpansion'];
   }) => Promise<void>;
   cancelStreamingSearch: () => void;
   sessionId: string;
@@ -207,6 +209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     targetPhotoCount: number;
     referenceImage?: string | null;
     imageConfirmedLocally?: boolean;
+    verifiedExpansion?: Project['verifiedExpansion'];
   }) => {
     // 1. Cancel any previous streaming search and clear previous results
     if (streamReaderRef.current) {
@@ -257,6 +260,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ]
         : [],
       mediaTypeRequested: params.mediaType,
+      verifiedExpansion: params.verifiedExpansion,
       targetVideoCount: effectiveVideoTarget,
       targetPhotoCount: effectivePhotoTarget,
       settings: {
@@ -287,7 +291,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           timestamp: new Date().toISOString(),
           stage: 'searching',
           message: params.imageConfirmedLocally
-            ? 'تم تأكيد صفحة المنتج؛ جاري جمع مراجعاتها فقط.'
+            ? 'تم تأكيد صفحة المنتج؛ جاري بدء جمع المراجعات.'
             : params.referenceImage
             ? 'جاري رفع صورة المنتج وفحص تصميمه ومواصفاته بالذكاء الاصطناعي...'
             : sourcePlatform === 'tiktok'
@@ -305,6 +309,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('search');
 
     try {
+      let effectiveExpansion = params.verifiedExpansion;
+      if (!effectiveExpansion && params.productUrl && params.referenceImage) {
+        // Refreshing a result created before the expansion fix must upgrade too.
+        try {
+          const referenceImage = await prepareIdentityImage(params.referenceImage);
+          const identity = await analyzeImageWithGemini(referenceImage, params.productName, abortController.signal, apiFetch);
+          if (identity.profile.confidence !== 'low') {
+            effectiveExpansion = {referenceImage,query:identity.query,profile:identity.profile};
+            const expansion = effectiveExpansion;
+            setCurrentProject(previous => previous?.id === projectId ? {...previous,verifiedExpansion:expansion} : previous);
+          }
+        } catch { abortController.signal.throwIfAborted(); }
+      }
       const res = await apiFetch('/api/stream-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -318,7 +335,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           targetVideoCount: effectiveVideoTarget,
           targetPhotoCount: effectivePhotoTarget,
           hasReferenceImage: Boolean(params.referenceImage),
-          referenceImage: params.imageConfirmedLocally ? undefined : params.referenceImage || undefined,
+          referenceImage: params.imageConfirmedLocally || effectiveExpansion ? undefined : params.referenceImage || undefined,
+          verifiedExpansion: effectiveExpansion,
         }),
       });
 

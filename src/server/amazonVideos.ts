@@ -34,10 +34,11 @@ interface AsinVideoCacheEntry {
   isNegative: boolean;
   cachedAt: number;
   expiresAt: number;
+  exhausted?: boolean;
 }
 
 const ASIN_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours TTL (positive & negative cache)
-const ASIN_CACHE_FILE = path.join(DATA_DIR, 'amazon_asin_videos_cache_v3.json');
+const ASIN_CACHE_FILE = path.join(DATA_DIR, 'amazon_asin_videos_cache_v4.json');
 const asinVideoCache = new Map<string, AsinVideoCacheEntry>();
 
 function loadAsinCacheFromDisk(): void {
@@ -344,15 +345,22 @@ export function parseAmazonUsVideosFromHtml(
 export async function fetchAmazonUsProductVideos(
   productUrlOrAsin: string,
   signal?: AbortSignal,
-  ..._legacyArgs: unknown[]
+  options: {limit?:number; onVideo?:(video:ExtractedAmazonVideo)=>void; onLimited?:(reason:string)=>void; fetchHtml?:typeof fetchAmazonHtml} = {}
 ): Promise<ExtractedAmazonVideo[]> {
   const asin = extractAsinFromUrl(productUrlOrAsin) || productUrlOrAsin.trim().toUpperCase();
   const isAsinValid = /^[B0-9][A-Z0-9]{9}$/.test(asin);
   const now = Date.now();
+  const limit = Math.min(500, Math.max(1, options.limit || 50));
+  signal?.throwIfAborted();
+  const fetchHtml = options.fetchHtml || fetchAmazonHtml;
 
   if (isAsinValid) {
     const cached = asinVideoCache.get(asin);
-    if (cached && cached.expiresAt > now) return cached.videos;
+    if (!options.fetchHtml && cached && cached.expiresAt > now && (cached.videos.length >= limit || cached.exhausted)) {
+      const videos = cached.videos.slice(0,limit);
+      videos.forEach(video=>options.onVideo?.(video));
+      return videos;
+    }
   }
 
   const dpUrl = isAsinValid ? `https://www.amazon.com/dp/${asin}` : productUrlOrAsin;
@@ -362,13 +370,13 @@ export async function fetchAmazonUsProductVideos(
 
   let blockError: AmazonBlockError | null = null;
   const [dpHtml, reviewsHtml] = await Promise.all([
-    fetchAmazonHtml(dpUrl, { signal, timeoutMs: 8000, minHtmlChars: 4000, referer: 'https://www.amazon.com/' }).catch((err: unknown) => {
+    fetchHtml(dpUrl, { signal, timeoutMs: 8000, minHtmlChars: 4000, referer: 'https://www.amazon.com/' }).catch((err: unknown) => {
       if (err instanceof AmazonBlockError) blockError = err;
       console.warn(`[AmazonVideos] Product page fetch error (${dpUrl}):`, (err as Error)?.message || err);
       return '';
     }),
     reviewsMediaUrl
-      ? fetchAmazonHtml(reviewsMediaUrl, { signal, timeoutMs: 8000, minHtmlChars: 2500, referer: dpUrl }).catch((err: unknown) => {
+      ? fetchHtml(reviewsMediaUrl, { signal, timeoutMs: 8000, minHtmlChars: 2500, referer: dpUrl }).catch((err: unknown) => {
           if (err instanceof AmazonBlockError && !blockError) blockError = err;
           console.warn(`[AmazonVideos] Media reviews fetch error (${reviewsMediaUrl}):`, (err as Error)?.message || err);
           return '';
@@ -385,29 +393,67 @@ export async function fetchAmazonUsProductVideos(
   for (const v of [...fromReviews, ...fromDp]) {
     if (!mergedByUuid.has(v.streamUuid)) mergedByUuid.set(v.streamUuid, v);
   }
-  const merged = Array.from(mergedByUuid.values());
-
-  const resolveBatchSize = 6;
-  for (let i = 0; i < merged.length; i += resolveBatchSize) {
-    if (signal?.aborted) break;
-    const slice = merged.slice(i, i + resolveBatchSize);
+  const delivered = new Set<string>();
+  const deliver = async () => {
+    const fresh = Array.from(mergedByUuid.values()).filter(video=>!delivered.has(video.streamUuid)).slice(0,limit-delivered.size);
+    for (let i = 0; i < fresh.length; i += 6) {
+      signal?.throwIfAborted();
+      const slice = fresh.slice(i,i+6);
     await Promise.all(
       slice.map(async (v) => {
-        v.downloadUrl = await resolveBestVideoDownloadUrl(v.mediaUrl, signal);
+        if (!options.fetchHtml) v.downloadUrl = await resolveBestVideoDownloadUrl(v.mediaUrl, signal);
+        delivered.add(v.streamUuid); options.onVideo?.(v);
       })
     );
+    }
+  };
+  await deliver();
+  if (blockError) options.onLimited?.('أمازون قيّد الوصول لبعض صفحات الريفيوهات');
+  let exhausted = Boolean(reviewsHtml) && !nextAmazonReviewPage(reviewsHtml,dpUrl,asin);
+  let html = reviewsHtml;
+  const visited = new Set<string>();
+  for (let page = 1; html && delivered.size < limit && page < 10; page++) {
+    signal?.throwIfAborted();
+    const next = nextAmazonReviewPage(html, dpUrl, asin);
+    if (!next) break;
+    if (visited.has(next)) { exhausted=false; options.onLimited?.('أمازون كرر نفس صفحة الريفيوهات'); break; }
+    visited.add(next); exhausted=false;
+    try {
+      html = await fetchHtml(next,{signal,timeoutMs:8000,minHtmlChars:2500,referer:dpUrl});
+      const videos = parseAmazonUsVideosFromHtml(html,dpUrl);
+      const before = mergedByUuid.size;
+      for (const video of videos) if (!mergedByUuid.has(video.streamUuid)) mergedByUuid.set(video.streamUuid,video);
+      if (before === mergedByUuid.size) { options.onLimited?.('لم تظهر فيديوهات جديدة في الصفحة التالية'); break; }
+      await deliver(); exhausted=!nextAmazonReviewPage(html,dpUrl,asin);
+    } catch (error) { signal?.throwIfAborted(); options.onLimited?.(error instanceof Error ? error.message : 'تعذر فتح صفحة الريفيوهات التالية'); break; }
   }
+  const merged = Array.from(mergedByUuid.values()).slice(0,limit);
 
-  if (isAsinValid && !signal?.aborted) {
+  if (isAsinValid && !signal?.aborted && !options.fetchHtml) {
     asinVideoCache.set(asin, {
       asin,
       videos: merged,
       isNegative: merged.length === 0,
       cachedAt: now,
-      expiresAt: now + ASIN_CACHE_TTL_MS,
+      expiresAt: now + (exhausted ? ASIN_CACHE_TTL_MS : 60_000),
+      exhausted,
     });
     saveAsinCacheToDisk();
   }
 
   return merged;
+}
+
+export function nextAmazonReviewPage(html:string, baseUrl:string, asin:string):string | null {
+  const block = html.match(/<li\b[^>]*class=["'][^"']*a-last[^"']*["'][^>]*>[\s\S]*?<\/li>/i)?.[0];
+  if (!block || /a-disabled/i.test(block)) return null;
+  const href = block.match(/href=["']([^"']+)["']/i)?.[1];
+  if (!href) return null;
+  try {
+    const url = new URL(decodeEntities(href),baseUrl);
+    if (url.protocol !== 'https:' || !['amazon.com','www.amazon.com'].includes(url.hostname) || url.username || url.password || url.port || !url.pathname.startsWith(`/product-reviews/${asin}`)) return null;
+    if (url.pathname.slice(`/product-reviews/${asin}`.length).replace(/\/$/,'') !== '') return null;
+    url.searchParams.set('mediaType','media_reviews_only');
+    return url.href;
+  } catch { return null; }
 }

@@ -153,6 +153,9 @@ export function detectAmazonBlock(
     return { blocked: true, reason: `HTTP status ${status}` };
   }
   const lower = html.toLowerCase();
+  if (/\bid=["']ap_login_form["']/.test(lower) || /<title[^>]*>\s*(?:amazon\s+sign[ -]?in|sign in)\s*<\/title>/.test(lower)) {
+    return {blocked:true, reason:'Amazon sign-in required for this review page'};
+  }
   if (
     lower.includes('validatecaptcha') ||
     lower.includes('api-services-support@amazon.com') ||

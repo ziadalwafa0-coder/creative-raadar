@@ -41,6 +41,7 @@ import {
 import { DATA_DIR } from './config.ts';
 import { downloadMedia, prewarmMediaInBackground, DOWNLOADS_DIR } from './downloader.ts';
 import { analyzeProductImage, isGeminiConfigured } from './gemini.ts';
+import {collectVerifiedListings} from './verifiedCollection.ts';
 
 export interface EphemeralAsset {
   id: string;
@@ -545,6 +546,7 @@ export async function handleStreamSearch(
   let assetCounter = 0;
   let inspectedCount = 0;
   let pagesBlockedCount = 0;
+  let reviewAccessLimited = false;
   let totalProductsDiscovered = 0;
 
   try {
@@ -644,7 +646,9 @@ export async function handleStreamSearch(
       type: 'progress',
       searchId,
       message: resolvedLinkIdentity?.directAmazonUsUrl
-        ? 'تم تحديد صفحة المنتج؛ نجمع مراجعات هذه الصفحة فقط دون التوسع لمنتجات أخرى.'
+        ? req.body?.verifiedExpansion
+          ? 'نبدأ من صفحة المنتج المحددة، ثم نستكمل العدد من قوائم اجتازت مقارنة نفس التصميم بالصورة.'
+          : 'تم تحديد صفحة المنتج؛ نجمع مراجعات هذه الصفحة فقط دون التوسع لمنتجات أخرى.'
         : `جاري البحث في أمازون أمريكا عن: "${finalQueries.primaryQuery}" مع إعطاء دقة التطابق الأولوية...`,
       foundCount: 0,
       resolvedProductName: displayArabicName,
@@ -711,7 +715,7 @@ export async function handleStreamSearch(
           url: resolvedLinkIdentity.directAmazonUsUrl,
           title: resolvedLinkIdentity.extractedTitle || searchProductName,
           imageUrl: resolvedLinkIdentity.imageUrl,
-          ratingCount: 1_000_000,
+          ratingCount: 0,
           matchScore: 99,
           matchCategory: 'exact_design',
         },
@@ -803,7 +807,11 @@ export async function handleStreamSearch(
 
         if (mediaType !== 'photo' && foundVideos < targetVideoCount) {
           try {
-            const videos = await fetchAmazonUsProductVideos(page.url, abortController.signal);
+            const videos = await fetchAmazonUsProductVideos(page.url, abortController.signal, {
+              limit:targetVideoCount-foundVideos,
+              onVideo:video=>emitVideo(video,page,titleVerdict),
+              onLimited:()=>{ reviewAccessLimited=true; },
+            });
             for (const v of videos) {
               if (abortController.signal.aborted || foundVideos >= targetVideoCount) break;
               emitVideo(v, page, titleVerdict);
@@ -885,6 +893,21 @@ export async function handleStreamSearch(
 
     const runProducer = async () => {
       try {
+        if (resolvedLinkIdentity?.directAmazonUsUrl && req.body?.verifiedExpansion) {
+          for await (const matches of collectVerifiedListings(req.body.verifiedExpansion,rawProductName,seenAsins,abortController.signal,message=>{
+            sendEvent({type:'progress',searchId,message,foundCount:foundVideos+foundPhotos,timestamp:new Date().toISOString()});
+          },isGoalReached)) {
+            if (isGoalReached() || abortController.signal.aborted) break;
+            for (const {page,verdict} of matches) {
+              if (seenAsins.has(page.asin)) continue;
+              seenAsins.add(page.asin); totalProductsDiscovered++;
+              workQueue.push({page,titleVerdict:{...verdict,matchCategory:'permitted_variation',userFacingLabelAr:'تطابق بصري للتصميم؛ الماركة والموديل غير مؤكدين'}});
+            }
+            workQueue.sort((a,b)=>b.page.ratingCount-a.page.ratingCount);
+            notifyQueueListeners();
+          }
+          return;
+        }
         await Promise.all(
           topVariants.map(async (qVariant) => {
             if (abortController.signal.aborted || isGoalReached()) return;
@@ -942,6 +965,8 @@ export async function handleStreamSearch(
             })
           );
         }
+      } catch (error) {
+        if (!abortController.signal.aborted) sendEvent({type:'warning',searchId,code:'VERIFIED_EXPANSION_LIMITED',message:'تعذر إكمال فحص القوائم الإضافية؛ احتفظنا بالريفيوهات المستخرجة فقط.',timestamp:new Date().toISOString()});
       } finally {
         producersFinished = true;
         notifyQueueListeners();
@@ -956,7 +981,9 @@ export async function handleStreamSearch(
     let reasonIfPartial: string | undefined;
 
     if (totalFound < totalTarget) {
-      if (pagesBlockedCount > 0 && totalProductsDiscovered === 0) {
+      if (reviewAccessLimited) {
+        reasonIfPartial='أمازون قيّد الوصول لبعض صفحات الريفيوهات. هذا عدد الفيديوهات التي استطعنا الوصول إليها، وليس كل الفيديوهات الموجودة.';
+      } else if (pagesBlockedCount > 0 && totalProductsDiscovered === 0) {
         reasonIfPartial = 'أمازون حظر الطلب';
         sendEvent({
           type: 'warning',

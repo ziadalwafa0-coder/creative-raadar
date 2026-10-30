@@ -25,7 +25,9 @@ Uploading a product image immediately proposes an editable English shopping name
 
 If Gemini is missing, times out or exhausts its quota, a browser-only quantized CLIP model supplies a limited category suggestion. The first run downloads model weights from Hugging Face into the browser cache. This fallback is not OCR and does not establish a brand, model or SKU.
 
-Before review collection, the app checks candidate titles (including explicit model/tier conflicts) and compares candidate photos with the reference. Weak visual evidence does not automatically start a search: the user must confirm a product card or supply its direct URL. Once selected, collection stays on that product page; it does not widen to unrelated products to reach a requested count. Customer-video extraction excludes unlinked creator-only demos, seller videos and unrelated ASIN recommendations.
+Before review collection, the app checks candidate titles (including explicit model/tier conflicts) and compares candidate photos with the reference. Weak visual evidence does not automatically start a search: the user must confirm a product card or supply its direct URL. A direct URL alone stays on that page. With the original image and a non-low-confidence Gemini profile, collection can inspect up to three search pages and 48 additional candidates; each extra listing requires a fresh server-side visual approval against the original image. Different brands/models are not claimed to be the same SKU. Customer-video extraction excludes unlinked creator-only demos, seller videos and unrelated ASIN recommendations.
+
+Review collection emits results incrementally, follows same-ASIN next-page links (up to ten review pages), and deduplicates stream IDs across listings. Sign-in pages are access restrictions, not empty review lists. Partial caches do not prevent a larger subsequent request. Refreshing an older image search prepares the visual input again so it can use verified expansion too. The requested count remains a target, not a guarantee.
 
 ### Gemini on Railway
 

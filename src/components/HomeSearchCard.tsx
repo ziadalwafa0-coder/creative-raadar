@@ -159,6 +159,7 @@ export const HomeSearchCard: React.FC = () => {
 
     try {
       let selectedUrl = trimmedUrl;
+      let expansionQuery = commercialName.trim();
       if (imagePreview && !trimmedUrl) {
         if (isScanning) throw new Error('انتظر اكتمال تحليل الصورة أولًا.');
         let query = commercialName.trim() || (!/[\u0600-\u06ff]/.test(trimmedName) ? trimmedName : '');
@@ -204,6 +205,7 @@ export const HomeSearchCard: React.FC = () => {
           return;
         }
         selectedUrl = approved.url;
+        expansionQuery = query;
       }
       await startStreamingSearch({
         productName: effectiveName,
@@ -214,6 +216,7 @@ export const HomeSearchCard: React.FC = () => {
         targetPhotoCount: safePhotoCount,
         referenceImage: imagePreview,
         imageConfirmedLocally: Boolean(imagePreview && selectedUrl),
+        verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:expansionQuery,profile:cloudProfileRef.current} : undefined,
       });
     } catch (error: any) {
       if (error?.name !== 'AbortError') {
@@ -342,7 +345,8 @@ export const HomeSearchCard: React.FC = () => {
                   try {
                     await startStreamingSearch({ productName: productName.trim() || commercialName, productUrl: candidate.url,
                       mediaType, sourcePlatform: 'amazon', targetVideoCount: clampCount(targetVideoInput), targetPhotoCount: clampCount(targetPhotoInput),
-                      referenceImage: imagePreview, imageConfirmedLocally: true });
+                      referenceImage: imagePreview, imageConfirmedLocally: true,
+                      verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:commercialName.trim(),profile:cloudProfileRef.current} : undefined });
                   } catch (error) { setValidationError(error instanceof Error ? error.message : 'تعذر بدء البحث.'); }
                   finally { setIsSubmitting(false); }
                 }}>ده نفس المنتج</button>
@@ -414,7 +418,7 @@ export const HomeSearchCard: React.FC = () => {
             className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors text-left"
           />
           <p className="text-[11px] text-[#616764] mt-1.5">
-            لو أضفت رابط صفحة المنتج، نجمع مراجعات نفس الصفحة فقط. ويمكنك بدلًا منه البحث بالاسم والصورة.
+            نبدأ من رابط المنتج. مع الصورة وتحليل Gemini، نبحث لاستكمال العدد من قوائم اجتازت مقارنة نفس التصميم؛ بدون صورة نجمع من صفحة الرابط فقط.
           </p>
         </div>
 
