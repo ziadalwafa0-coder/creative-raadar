@@ -594,7 +594,8 @@ export async function handleStreamSearch(
               mime,
               undefined,
               rawProductUrl,
-              userTypedNonUrlName
+              userTypedNonUrlName,
+              abortController.signal
             ).catch((err: unknown) => {
               console.warn('[StreamSearch] Image booster analysis failed:', (err as Error)?.message || err);
               return null;
@@ -610,6 +611,10 @@ export async function handleStreamSearch(
     ]);
 
     if (abortController.signal.aborted) return;
+
+    const verifiedExpansion = req.body?.verifiedExpansion || (rawReferenceImage && resolvedImageProfile
+      ? {referenceImage:rawReferenceImage,query:resolvedImageProfile.commercialNameEn || resolvedImageProfile.suggestedNameEn,profile:resolvedImageProfile}
+      : undefined);
 
     const searchProductName =
       resolvedLinkIdentity?.canonicalSearchQuery ||
@@ -646,7 +651,7 @@ export async function handleStreamSearch(
       type: 'progress',
       searchId,
       message: resolvedLinkIdentity?.directAmazonUsUrl
-        ? req.body?.verifiedExpansion
+        ? verifiedExpansion
           ? 'نبدأ من صفحة المنتج المحددة، ثم نستكمل العدد من قوائم اجتازت مقارنة نفس التصميم بالصورة.'
           : 'تم تحديد صفحة المنتج؛ نجمع مراجعات هذه الصفحة فقط دون التوسع لمنتجات أخرى.'
         : `جاري البحث في أمازون أمريكا عن: "${finalQueries.primaryQuery}" مع إعطاء دقة التطابق الأولوية...`,
@@ -893,8 +898,8 @@ export async function handleStreamSearch(
 
     const runProducer = async () => {
       try {
-        if (resolvedLinkIdentity?.directAmazonUsUrl && req.body?.verifiedExpansion) {
-          for await (const matches of collectVerifiedListings(req.body.verifiedExpansion,rawProductName,seenAsins,abortController.signal,message=>{
+        if (resolvedLinkIdentity?.directAmazonUsUrl && verifiedExpansion) {
+          for await (const matches of collectVerifiedListings(verifiedExpansion,rawProductName,seenAsins,abortController.signal,message=>{
             sendEvent({type:'progress',searchId,message,foundCount:foundVideos+foundPhotos,timestamp:new Date().toISOString()});
           },isGoalReached)) {
             if (isGoalReached() || abortController.signal.aborted) break;
