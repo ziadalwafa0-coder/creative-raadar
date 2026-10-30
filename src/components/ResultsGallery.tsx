@@ -18,6 +18,9 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
   const [isExportingZip, setIsExportingZip] = useState<boolean>(false);
 
   const candidates = project.candidates || [];
+  const terminalMessage = ['completed_partial', 'failed'].includes(project.jobState)
+    ? project.logs.at(-1)?.message
+    : undefined;
   const failedCount = candidates.filter((c) => c.downloadStatus === 'download_failed').length;
   const downloadableCandidates = candidates.filter((c) => {
     const targetUrl = c.downloadUrl || c.mediaUrl;
@@ -206,10 +209,10 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
             <FolderOpen className="w-5 h-5" />
           </div>
           <h4 className="font-bold text-[#181B1A] text-sm mb-1">
-            لا توجد نتائج متاحة حتى الآن
+            {terminalMessage ? 'لم يتم جلب نتائج مطابقة' : 'لا توجد نتائج متاحة حتى الآن'}
           </h4>
           <p className="text-xs text-[#616764] max-w-sm mx-auto">
-            تظهر الفيديوهات والصور هنا فور اكتمال استخراجها، أو يمكنك فتح التفاصيل لإضافة رابط مباشر.
+            {terminalMessage || 'تظهر الفيديوهات والصور هنا فور اكتمال استخراجها، أو يمكنك فتح التفاصيل لإضافة رابط مباشر.'}
           </p>
         </div>
       )}
