@@ -28,7 +28,12 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
   const [imgFailed, setImgFailed] = useState(false);
 
   const isVideo = asset.mediaType === 'video';
-  const isDownloaded = asset.downloadStatus === 'verified_available';
+  const isTikTok = asset.platform === 'tiktok' || Boolean(asset.sourceUrl?.includes('tiktok.com'));
+  const isDownloaded =
+    asset.downloadStatus === 'verified_available' ||
+    (Boolean(asset.mediaUrl) &&
+      !asset.mediaUrl?.includes('youtube.com') &&
+      !asset.mediaUrl?.includes('youtu.be'));
   const isFailed = asset.downloadStatus === 'download_failed';
 
   const handleRetryDownload = async (e: React.MouseEvent) => {
@@ -58,8 +63,13 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
     setIsDownloading(true);
     try {
       const ext = isVideo ? 'mp4' : 'jpg';
+      const targetUrl = asset.downloadUrl || asset.mediaUrl;
+      const isEphemeral = !asset.projectId || asset.projectId.startsWith('ephemeral-') || currentProject.id.startsWith('ephemeral-');
+      const dlUrl = isEphemeral && targetUrl
+        ? `/api/stream-search/download?url=${encodeURIComponent(targetUrl)}&type=${asset.mediaType}&title=${encodeURIComponent(asset.title || asset.id)}`
+        : `/api/projects/${currentProject.id}/assets/${asset.id}/download`;
       await downloadWithSession(
-        `/api/projects/${currentProject.id}/assets/${asset.id}/download`,
+        dlUrl,
         `${asset.id}_verified.${ext}`
       );
     } finally {
@@ -111,6 +121,15 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
       <div className="p-4 flex-1 flex flex-col justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-1.5 mb-2">
+            <span
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                isTikTok
+                  ? 'bg-[#181B1A] text-white border-[#181B1A]'
+                  : 'bg-[#EAF3F2] text-[#247C72] border-[#247C72]/30'
+              }`}
+            >
+              {isTikTok ? 'تيك توك • TikTok' : 'أمازون • Amazon'}
+            </span>
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${provInfo.badge}`}>
               {provInfo.label}
             </span>
@@ -118,10 +137,28 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
 
           <h4
             onClick={() => onPreview(asset)}
-            className="font-bold text-[#181B1A] text-sm line-clamp-2 leading-snug cursor-pointer hover:text-[#247C72] transition-colors mb-1.5"
+            className="font-bold text-[#181B1A] text-sm line-clamp-2 leading-snug cursor-pointer hover:text-[#247C72] transition-colors mb-1"
           >
             {asset.title}
           </h4>
+
+          {asset.productListingUrl && (
+            <a
+              href={asset.productListingUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#247C72] hover:underline mb-1.5 max-w-full"
+              title={asset.productListingUrl}
+            >
+              <ExternalLink className="w-3 h-3 shrink-0" />
+              <span className="truncate">
+                {isTikTok && asset.productListingUrl.includes('tiktok.com')
+                  ? 'فتح الفيديو على تيك توك'
+                  : 'صفحة المنتج على أمازون'}
+              </span>
+            </a>
+          )}
 
           {asset.reviewerOrChannel && (
             <p className="text-xs text-[#616764] mb-2 truncate">

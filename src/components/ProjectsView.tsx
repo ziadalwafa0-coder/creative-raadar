@@ -6,7 +6,8 @@ import {
   Trash2,
   Calendar,
   Video,
-  Image as ImageIcon
+  Image as ImageIcon,
+  ExternalLink
 } from 'lucide-react';
 
 export const ProjectsView: React.FC = () => {
@@ -75,6 +76,10 @@ export const ProjectsView: React.FC = () => {
         const photoCount = candidates.filter((c) => c.mediaType === 'photo').length;
         const status = getStatusLabel(proj.jobState);
 
+        const directProductUrl =
+          candidates.find((c) => c.productListingUrl)?.productListingUrl ||
+          `https://www.amazon.com/s?k=${encodeURIComponent(proj.productProfile?.suggestedNameEn || proj.name)}`;
+
         return (
           <div
             key={proj.id}
@@ -98,6 +103,18 @@ export const ProjectsView: React.FC = () => {
                 <h4 className="font-bold text-[#181B1A] text-sm sm:text-base truncate">
                   {proj.name}
                 </h4>
+
+                <a
+                  href={directProductUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#247C72] hover:underline mt-0.5 max-w-full"
+                  title={directProductUrl}
+                >
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">رابط مباشر لصفحة المنتج</span>
+                </a>
 
                 <div className="flex flex-wrap items-center gap-2.5 mt-1.5 text-xs text-[#616764]">
                   <span className="inline-flex items-center gap-1">

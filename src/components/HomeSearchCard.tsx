@@ -1,14 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext.tsx';
-import { Upload, X, RefreshCw, Video, Image as ImageIcon, Layers } from 'lucide-react';
+import { Upload, X, RefreshCw, Video, Image as ImageIcon, Layers, Link as LinkIcon, ExternalLink } from 'lucide-react';
 import { Project } from '../types/index.ts';
-import { RequestScope } from '../utils/requestScope.ts';
 
 export const HomeSearchCard: React.FC = () => {
-  const { commitProject, getSelectionEpoch, setActiveTab, showToast, apiFetch, droppedFile, setDroppedFile } = useApp();
+  const {
+    setCurrentProject,
+    setActiveTab,
+    showToast,
+    apiFetch,
+    droppedFile,
+    setDroppedFile,
+    startStreamingSearch,
+    cancelStreamingSearch,
+  } = useApp();
 
   const [productName, setProductName] = useState('');
-  const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('both');
+  const [productUrl, setProductUrl] = useState('');
+  const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('video');
   const [targetVideoInput, setTargetVideoInput] = useState<string>('10');
   const [targetPhotoInput, setTargetPhotoInput] = useState<string>('10');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -17,10 +26,6 @@ export const HomeSearchCard: React.FC = () => {
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageReadScope = useRef(new RequestScope());
-  const submitLock = useRef(false);
-  const [isReadingImage, setIsReadingImage] = useState(false);
-  useEffect(() => () => { imageReadScope.current.invalidate(); }, []);
 
   const handleImageFile = (file?: File) => {
     if (!file) return;
@@ -29,15 +34,9 @@ export const HomeSearchCard: React.FC = () => {
       return;
     }
     setValidationError(null);
-    const readEpoch = imageReadScope.current.invalidate();
-    setImagePreview(null);
-    setIsReadingImage(true);
     const reader = new FileReader();
     reader.onloadend = () => {
-      if (!imageReadScope.current.accepts(readEpoch)) return;
-      setIsReadingImage(false);
-      if (typeof reader.result === 'string') setImagePreview(reader.result);
-      else setValidationError('تعذر قراءة الصورة. أعد رفعها.');
+      setImagePreview(reader.result as string);
     };
     reader.readAsDataURL(file);
   };
@@ -55,7 +54,6 @@ export const HomeSearchCard: React.FC = () => {
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    e.stopPropagation();
     setIsDragging(false);
     handleImageFile(e.dataTransfer.files?.[0]);
   };
@@ -68,81 +66,55 @@ export const HomeSearchCard: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitLock.current || isReadingImage) return;
-    const epoch = getSelectionEpoch();
-    const trimmed = productName.trim();
+    const trimmedName = productName.trim();
+    const trimmedUrl = productUrl.trim();
 
-    if (!trimmed && !imagePreview) {
-      setValidationError('يرجى إدخال اسم المنتج أو رفع صورته للبدء');
+    if (!trimmedName && !trimmedUrl && !imagePreview) {
+      setValidationError('يرجى كتابة اسم المنتج أو رفع صورته أو إدخال رابط مباشر لصفحة المنتج لبدء البحث');
+      return;
+    }
+
+    if (trimmedUrl && !/^https?:\/\//i.test(trimmedUrl) && !/\bB0[A-Z0-9]{8}\b/i.test(trimmedUrl)) {
+      setValidationError('يرجى إدخال رابط صفحة منتج صحيح يبدأ بـ https://');
       return;
     }
 
     setValidationError(null);
     setIsSubmitting(true);
-    submitLock.current = true;
+    cancelStreamingSearch();
 
-    const isUrl = /^https?:\/\//i.test(trimmed);
     const safeVideoCount = clampCount(targetVideoInput);
     const safePhotoCount = clampCount(targetPhotoInput);
     setTargetVideoInput(String(safeVideoCount));
     setTargetPhotoInput(String(safePhotoCount));
 
+    const effectiveName = trimmedName || trimmedUrl || (imagePreview ? 'بحث بالصورة' : '');
+
     try {
-      const detectedMime =
-        imagePreview?.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/i)?.[1] || 'image/jpeg';
-      const referenceImages = imagePreview
-        ? [
-            {
-              id: `img-${Date.now()}`,
-              url: imagePreview,
-              base64Data: imagePreview,
-              mimeType: detectedMime,
-              isPrimary: true,
-              label: 'صورة المنتج',
-            },
-          ]
-        : [];
-
-      const res = await apiFetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: trimmed || 'بحث بالصورة',
-          referenceImages,
-          productListingUrl: isUrl ? trimmed : undefined,
-          mediaTypeRequested: mediaType,
-          targetVideoCount: safeVideoCount,
-          targetPhotoCount: safePhotoCount,
-        }),
+      await startStreamingSearch({
+        productName: effectiveName,
+        productUrl: trimmedUrl || undefined,
+        mediaType,
+        sourcePlatform: 'amazon',
+        targetVideoCount: safeVideoCount,
+        targetPhotoCount: safePhotoCount,
+        referenceImage: imagePreview,
       });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'تعذر إنشاء المشروع');
-      }
-
-      const project = await res.json();
-      if (!commitProject(project, epoch)) return;
-      setActiveTab('search');
-
-      const searchResponse = await apiFetch(`/api/projects/${project.id}/search`, {
-        method: 'POST',
-      });
-      if (!searchResponse.ok) throw new Error('تعذر بدء البحث');
-      if (getSelectionEpoch() !== epoch) return;
-
-      const updatedRes = await apiFetch(`/api/projects/${project.id}`);
-      if (updatedRes.ok) {
-        const updatedProj = await updatedRes.json();
-        commitProject(updatedProj, epoch);
-      }
     } catch (error: any) {
-      if (getSelectionEpoch() === epoch) showToast(error.message || 'حدث خطأ أثناء بدء البحث', 'error');
+      showToast(error.message || 'حدث خطأ أثناء بدء البحث', 'error');
     } finally {
-      submitLock.current = false;
       setIsSubmitting(false);
     }
   };
+
+  const directPreviewHref =
+    productUrl.trim() && /^https?:\/\//i.test(productUrl.trim())
+      ? productUrl.trim()
+      : productName.trim() && /^https?:\/\//i.test(productName.trim())
+      ? productName.trim()
+      : productName.trim()
+      ? `https://www.amazon.com/s?k=${encodeURIComponent(productName.trim())}`
+      : 'https://www.amazon.com';
 
   return (
     <div className="w-full max-w-[760px] mx-auto">
@@ -153,7 +125,7 @@ export const HomeSearchCard: React.FC = () => {
         {/* 1) Large Drag/Drop Product Image Box */}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
-            صورة المنتج
+            صورة المنتج (مرجع اختياري)
           </label>
           <input
             ref={fileInputRef}
@@ -182,7 +154,7 @@ export const HomeSearchCard: React.FC = () => {
                 <Upload className="w-5 h-5" />
               </div>
               <p className="text-sm font-medium text-[#181B1A]">
-                اسحب وأفلت صورة المنتج هنا، أو اضغط للاختيار
+                اسحب وأفلت صورة المنتج هنا كمرجع، أو اضغط للاختيار
               </p>
               <p className="text-xs text-[#616764]">PNG, JPG, WEBP</p>
             </div>
@@ -196,10 +168,10 @@ export const HomeSearchCard: React.FC = () => {
                 />
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-[#181B1A] truncate">
-                    تم إرفاق صورة المنتج
+                    تم إرفاق صورة مرجعية للمنتج
                   </p>
-                  <p className="text-xs text-[#616764] mt-0.5">
-                    جاهزة للبحث والمطابقة
+                  <p className="text-xs text-[#247C72] bg-[#EAF3F2] border border-[#247C72]/30 px-2 py-0.5 rounded-md mt-1 inline-block font-medium">
+                    معزّز ذكي بالصورة (Booster) لتحسين دقة البحث على أمازون
                   </p>
                 </div>
               </div>
@@ -215,8 +187,6 @@ export const HomeSearchCard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    imageReadScope.current.invalidate();
-                    setIsReadingImage(false);
                     setImagePreview(null);
                     if (fileInputRef.current) fileInputRef.current.value = '';
                   }}
@@ -246,9 +216,50 @@ export const HomeSearchCard: React.FC = () => {
               setProductName(e.target.value);
               if (validationError) setValidationError(null);
             }}
-            placeholder="أدخل اسم المنتج أو رابط الصفحة..."
+            placeholder="أدخل اسم المنتج (مثال: جزامة 9 دور بغطاء)..."
             className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
           />
+        </div>
+
+        {/* 2b) Direct Product Page Link right under Product Name */}
+        <div>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <label
+              htmlFor="product-url-input"
+              className="flex items-center gap-1.5 text-sm font-semibold text-[#181B1A]"
+            >
+              <LinkIcon className="w-4 h-4 text-[#247C72]" />
+              <span>رابط مباشر لصفحة المنتج على أمازون (اختياري)</span>
+            </label>
+
+            {(productUrl.trim() || productName.trim()) && (
+              <a
+                href={directPreviewHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs font-semibold text-[#247C72] hover:text-[#1E665E] bg-[#EAF3F2] hover:bg-[#DCECE9] px-2.5 py-1 rounded-lg transition-colors"
+              >
+                <span>فتح صفحة المنتج</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </div>
+
+          <input
+            id="product-url-input"
+            type="text"
+            dir="ltr"
+            value={productUrl}
+            onChange={(e) => {
+              setProductUrl(e.target.value);
+              if (validationError) setValidationError(null);
+            }}
+            placeholder="https://www.amazon.com/dp/..."
+            className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors text-left"
+          />
+          <p className="text-[11px] text-[#616764] mt-1.5">
+            يمكنك وضع رابط صفحة المنتج من أمازون لسحب فيديوهات مراجعات العملاء والمنتجات المشابهة الأعلى تقييماً، أو الاكتفاء باسم المنتج.
+          </p>
         </div>
 
         {/* 3) Media Type Selector (فيديوهات / صور / الاثنين) */}
@@ -295,6 +306,7 @@ export const HomeSearchCard: React.FC = () => {
             </button>
           </div>
         </div>
+
 
         {/* 4) Independent Video & Photo Counts (1..500, default 10) */}
         <div
@@ -354,7 +366,7 @@ export const HomeSearchCard: React.FC = () => {
         {/* 5) Single Primary Button: ابدأ البحث */}
         <button
           type="submit"
-          disabled={isSubmitting || isReadingImage}
+          disabled={isSubmitting}
           className="w-full h-12 rounded-xl bg-[#247C72] hover:bg-[#1E665E] disabled:opacity-60 text-white font-semibold text-sm transition-colors flex items-center justify-center cursor-pointer"
         >
           {isSubmitting ? 'جاري بدء البحث...' : 'ابدأ البحث'}

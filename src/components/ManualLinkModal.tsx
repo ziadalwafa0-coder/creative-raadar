@@ -20,7 +20,7 @@ interface Props {
 }
 
 export const ManualLinkModal: React.FC<Props> = ({ isOpen, onClose, projectId }) => {
-  const { currentProject, commitProject, getSelectionEpoch, refreshProjects, showToast, apiFetch } = useApp();
+  const { currentProject, setCurrentProject, refreshProjects, showToast, apiFetch } = useApp();
 
   const [sourceUrl, setSourceUrl] = useState('');
   const [directMediaUrl, setDirectMediaUrl] = useState('');
@@ -35,7 +35,6 @@ export const ManualLinkModal: React.FC<Props> = ({ isOpen, onClose, projectId })
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const epoch = getSelectionEpoch();
     if (!sourceUrl.trim()) {
       showToast('يرجى إدخال رابط المصدر', 'warn');
       return;
@@ -47,8 +46,7 @@ export const ManualLinkModal: React.FC<Props> = ({ isOpen, onClose, projectId })
       if (!activeProjectId) {
         const created = await apiFetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: title.trim() || 'فيديوهات مضافة بروابط', mediaTypeRequested: 'video', targetVideoCount: 10 }) });
         if (!created.ok) throw new Error('تعذر إنشاء مشروع للروابط');
-        const project = await created.json(); activeProjectId = project.id;
-        if (!commitProject(project, epoch)) return;
+        const project = await created.json(); activeProjectId = project.id; setCurrentProject(project);
       }
       const res = await apiFetch(`/api/projects/${activeProjectId}/manual-links`, {
         method: 'POST',
@@ -66,7 +64,6 @@ export const ManualLinkModal: React.FC<Props> = ({ isOpen, onClose, projectId })
       if (!res.ok) {
         throw new Error(data.error || 'فشلت إضافة الرابط');
       }
-      if (getSelectionEpoch() !== epoch) return;
 
       showToast('تمت إضافة رابط المراجعة بنجاح!', 'success');
       setSourceUrl('');
@@ -74,7 +71,7 @@ export const ManualLinkModal: React.FC<Props> = ({ isOpen, onClose, projectId })
       setTitle('');
       setReviewerOrChannel('');
       const updated = await apiFetch(`/api/projects/${activeProjectId}`);
-      if (updated.ok) commitProject(await updated.json(), epoch);
+      if (updated.ok) setCurrentProject(await updated.json());
       await refreshProjects();
       onClose();
     } catch (err) {

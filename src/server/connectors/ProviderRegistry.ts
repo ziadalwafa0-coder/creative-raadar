@@ -1,7 +1,6 @@
-import { IConnector } from './types.ts';
+import type { IConnector } from './types.ts';
 import { AmazonConnector } from './AmazonConnector.ts';
-import { YouTubeConnector } from './YouTubeConnector.ts';
-import { ProviderCapability } from '../../types/index.ts';
+import type { ProviderCapability } from '../../types/index.ts';
 import { isGeminiConfigured } from '../gemini.ts';
 
 export class ProviderRegistry {
@@ -10,7 +9,6 @@ export class ProviderRegistry {
 
   private constructor() {
     this.register(new AmazonConnector());
-    this.register(new YouTubeConnector());
   }
 
   public static getInstance(): ProviderRegistry {
@@ -31,14 +29,13 @@ export class ProviderRegistry {
   public getAllCapabilities(): ProviderCapability[] {
     const list: ProviderCapability[] = [];
 
-    // 1. Gemini Multimodal & Grounding Provider
     const geminiReady = isGeminiConfigured();
     list.push({
       id: 'gemini_multimodal',
       name: 'Gemini Multimodal & Search Grounding',
-      nameAr: 'محرك جيميناي للتحليل البصري والبحث الحي',
-      description: 'Powers product physical breakdown, must-match detection, and real Google Search grounded discovery.',
-      descriptionAr: 'يقوم بالتحليل البصري للمنتج وتحديد السمات الإلزامية والبحث المباشر عبر Google Search.',
+      nameAr: 'محرك جيميناي للتحليل البصري والترجمة الذكية',
+      description: 'Powers product translation and optional image booster analysis.',
+      descriptionAr: 'يقوم بترجمة اسم المنتج إلى الإنجليزية وتحليل الصورة الاختيارية لتعزيز دقة البحث.',
       state: geminiReady ? 'ready' : 'missing_config',
       supportedOperations: {
         discovery: true,
@@ -49,22 +46,20 @@ export class ProviderRegistry {
       },
       requiredSecrets: ['GEMINI_API_KEY'],
       configuredSecrets: geminiReady ? ['GEMINI_API_KEY'] : [],
-      notes: 'Active and configured automatically via AI Studio environment.',
-      notesAr: 'مفعل وجاهز تلقائيًا عبر بيئة الاستوديو.',
+      notes: 'Active and configured automatically via environment.',
+      notesAr: 'مفعل وجاهز تلقائيًا عبر بيئة التشغيل.',
     });
 
-    // 2. Connectors
     for (const connector of this.connectors.values()) {
       list.push(connector.capabilities());
     }
 
-    // 3. Media Download & Verification Worker
     list.push({
       id: 'media_worker',
       name: 'Safe Media Downloader & Verifier Worker',
-      nameAr: 'خادم التحميل والفحص البصري الآمن',
-      description: 'Server-side media pipeline enforcing SSRF guardrails, file integrity checks, SHA-256 deduplication, and ZIP packaging.',
-      descriptionAr: 'معالج سيرفر متكامل لفحص الروابط المشبوهة، منع SSRF، استخراج بصمات التكرار وبناء حزم التصدير.',
+      nameAr: 'خادم التحميل والفحص الآمن',
+      description: 'Server-side media pipeline enforcing SSRF guardrails, ffprobe verification, SHA-256 deduplication, and streamed ZIP packaging.',
+      descriptionAr: 'معالج سيرفر متكامل لفحص الروابط، منع SSRF، التحقق عبر ffprobe وبناء حزم التصدير.',
       state: 'ready',
       supportedOperations: {
         discovery: false,

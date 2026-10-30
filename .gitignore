@@ -1,7 +1,4 @@
 node_modules/
-.data/
-.aistudio/
-temp_*.txt
 build/
 dist/
 coverage/
@@ -9,4 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
-.vercel
+.data/
+.playwright-cli/
+
+.aistudio/
+.vercel/

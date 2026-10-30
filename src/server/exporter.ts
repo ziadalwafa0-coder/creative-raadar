@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ZipArchive, ZipEntryData } from 'archiver';
-import { Response } from 'express';
-import { Project, CandidateAsset } from '../types/index.ts';
-import { sanitizeCsvField } from '../utils/security.ts';
+import { ZipArchive, type ZipEntryData } from 'archiver';
+import type { Response } from 'express';
+import type { Project, CandidateAsset } from '../types/index.ts';
+import { sanitizeCsvField } from '../utils/security.server.ts';
 import { getExportFolderName } from '../utils/rules.ts';
 
 /**
@@ -22,6 +22,36 @@ export async function streamExportArchive(
       code: 'NO_ASSETS_SELECTED',
     });
     return;
+  }
+
+  // Auto-download any assets that have a valid mediaUrl but haven't been saved to disk yet
+  const pendingToDownload = assets.filter(
+    (a) =>
+      (!a.localFilePath || !fs.existsSync(a.localFilePath)) &&
+      a.mediaUrl &&
+      !a.mediaUrl.includes('youtube.com') &&
+      !a.mediaUrl.includes('youtu.be')
+  );
+  if (pendingToDownload.length > 0) {
+    try {
+      const { downloadMedia } = await import('./downloader.ts');
+      const batchSize = 6;
+      for (let i = 0; i < pendingToDownload.length; i += batchSize) {
+        const batch = pendingToDownload.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (asset) => {
+            if (!asset.mediaUrl) return;
+            const resDl = await downloadMedia(asset.mediaUrl, asset.id, asset.mediaType);
+            if (resDl.status === 'verified_available' && resDl.localFilePath) {
+              asset.downloadStatus = 'verified_available';
+              asset.localFilePath = resDl.localFilePath;
+              asset.sha256 = resDl.sha256 || asset.sha256;
+              asset.fileSizeBytes = resDl.fileSizeBytes || asset.fileSizeBytes;
+            }
+          })
+        );
+      }
+    } catch {}
   }
 
   const downloadedAssets = assets.filter(
@@ -46,7 +76,7 @@ export async function streamExportArchive(
   );
 
   const archive = new ZipArchive({
-    zlib: { level: 1 },
+    store: true,
   });
 
   archive.on('error', (err) => {

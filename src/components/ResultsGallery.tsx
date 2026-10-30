@@ -1,23 +1,86 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Project, CandidateAsset } from '../types/index.ts';
 import { useApp } from '../context/AppContext.tsx';
 import { AssetCard } from './AssetCard.tsx';
 import { AssetPreviewModal } from './AssetPreviewModal.tsx';
-import { Download, RotateCcw, Loader2, FolderOpen } from 'lucide-react';
+import { Download, RotateCcw, Loader2, FolderOpen, Film } from 'lucide-react';
 
 interface Props {
   project: Project;
 }
 
 export const ResultsGallery: React.FC<Props> = ({ project }) => {
-  const { showToast, refreshProjects, apiFetch, downloadWithSession } = useApp();
+  const { showToast, refreshProjects, apiFetch, downloadWithSession, sessionId } = useApp();
 
   const [previewingAsset, setPreviewingAsset] = useState<CandidateAsset | null>(null);
   const [isRetryingAllFailed, setIsRetryingAllFailed] = useState<boolean>(false);
-  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [isBulkDownloadingMp4, setIsBulkDownloadingMp4] = useState<boolean>(false);
+  const [isExportingZip, setIsExportingZip] = useState<boolean>(false);
 
   const candidates = project.candidates || [];
   const failedCount = candidates.filter((c) => c.downloadStatus === 'download_failed').length;
+  const downloadableCandidates = candidates.filter((c) => {
+    const targetUrl = c.downloadUrl || c.mediaUrl;
+    return (
+      c.downloadStatus === 'verified_available' ||
+      (targetUrl && !targetUrl.includes('youtube.com') && !targetUrl.includes('youtu.be'))
+    );
+  });
+  const videoCandidates = downloadableCandidates.filter((c) => c.mediaType === 'video');
+
+  const isEphemeralProject = project.id.startsWith('ephemeral-');
+  const rawSearchId = project.id.replace(/^ephemeral-/, '');
+  const tokenParam = sessionId ? `&token=${encodeURIComponent(sessionId)}` : '';
+  const exportZipHref = isEphemeralProject
+    ? `/api/stream-search/export-zip?searchId=${encodeURIComponent(rawSearchId)}${tokenParam}`
+    : `/api/projects/${encodeURIComponent(project.id)}/export?type=all${tokenParam}`;
+
+  // Keep server's recentSearchResults synced with current UI candidates (survives server restarts)
+  useEffect(() => {
+    if (!isEphemeralProject || candidates.length === 0) return;
+    apiFetch('/api/stream-search/prepare-zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        searchId: rawSearchId,
+        productName: project.name,
+        assets: candidates,
+      }),
+    }).catch(() => {});
+  }, [isEphemeralProject, rawSearchId, project.name, candidates.length]);
+
+  const handleExportZipClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    if (isExportingZip || candidates.length === 0) return;
+
+    setIsExportingZip(true);
+    showToast('جاري تجهيز وتنزيل حزمة (.ZIP) مباشرة من الخادم...', 'info');
+
+    try {
+      if (isEphemeralProject) {
+        await apiFetch('/api/stream-search/prepare-zip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            searchId: rawSearchId,
+            productName: project.name,
+            assets: candidates,
+          }),
+        }).catch(() => {});
+      }
+
+      const safeZipName = `${(project.name || 'Creative_Radaar_Export')
+        .replace(/[^a-zA-Z0-9_\u0600-\u06FF-]/g, '_')
+        .slice(0, 40)}_${new Date().toISOString().split('T')[0]}.zip`;
+
+      const ok = await downloadWithSession(exportZipHref, safeZipName);
+      if (ok) {
+        showToast('تم تنزيل حزمة (.ZIP) بنجاح', 'success');
+      }
+    } finally {
+      setIsExportingZip(false);
+    }
+  };
 
   const handleRetryFailed = async () => {
     const failedAssets = candidates.filter((c) => c.downloadStatus === 'download_failed');
@@ -39,25 +102,35 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
     }
   };
 
-  const handleExportZip = async () => {
-    if (candidates.length === 0) {
-      showToast('لا توجد نتائج لتنزيلها بعد', 'warn');
+  const handleBulkDownloadVideos = async () => {
+    if (videoCandidates.length === 0) {
+      showToast('لا توجد فيديوهات متاحة للتنزيل المباشر', 'warn');
       return;
     }
 
-    setIsExporting(true);
-    showToast('جاري تجهيز وتنزيل الحزمة (.ZIP)...', 'info');
+    setIsBulkDownloadingMp4(true);
+    showToast(`جاري بدء تنزيل ${videoCandidates.length} فيديو مباشرة من الخادم...`, 'info');
+
     try {
-      const safeName = (project.name || 'project').replace(/[^a-zA-Z0-9_\u0600-\u06FF-]/g, '_');
-      const ok = await downloadWithSession(
-        `/api/projects/${project.id}/export?type=all`,
-        `Creative_Radaar_${safeName}.zip`
-      );
-      if (ok) {
-        showToast('تم تنزيل الحزمة (.ZIP) بنجاح', 'success');
+      for (let i = 0; i < videoCandidates.length; i++) {
+        const asset = videoCandidates[i];
+        const targetUrl = asset.downloadUrl || asset.mediaUrl;
+        const isEphemeral =
+          !asset.projectId ||
+          asset.projectId.startsWith('ephemeral-') ||
+          isEphemeralProject;
+        const dlUrl =
+          isEphemeral && targetUrl
+            ? `/api/stream-search/download?url=${encodeURIComponent(
+                targetUrl
+              )}&type=${asset.mediaType}&title=${encodeURIComponent(asset.title || asset.id)}${tokenParam}`
+            : `/api/projects/${project.id}/assets/${asset.id}/download${sessionId ? `?token=${encodeURIComponent(sessionId)}` : ''}`;
+
+        await downloadWithSession(dlUrl, `${asset.id}_video_${i + 1}.mp4`);
       }
+      showToast(`اكتمل تنزيل ${videoCandidates.length} فيديو`, 'success');
     } finally {
-      setIsExporting(false);
+      setIsBulkDownloadingMp4(false);
     }
   };
 
@@ -70,7 +143,7 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
             إجمالي النتائج: <span className="text-[#181B1A] font-bold">{candidates.length}</span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {failedCount > 0 && (
               <button
                 onClick={handleRetryFailed}
@@ -82,18 +155,36 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
               </button>
             )}
 
-            <button
-              onClick={handleExportZip}
-              disabled={isExporting}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#247C72] hover:bg-[#1E665E] disabled:opacity-60 text-white text-xs font-semibold transition-colors cursor-pointer"
+            {videoCandidates.length > 1 && (
+              <button
+                onClick={handleBulkDownloadVideos}
+                disabled={isBulkDownloadingMp4}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#247C72]/30 bg-[#EAF3F2] hover:bg-[#DCECE9] disabled:opacity-60 text-[#247C72] text-xs font-semibold transition-colors cursor-pointer"
+              >
+                {isBulkDownloadingMp4 ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Film className="w-3.5 h-3.5" />
+                )}
+                <span>تنزيل كل الفيديوهات ({videoCandidates.length})</span>
+              </button>
+            )}
+
+            <a
+              href={exportZipHref}
+              download
+              onClick={handleExportZipClick}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#247C72] hover:bg-[#1E665E] text-white text-xs font-semibold transition-colors cursor-pointer ${
+                isExportingZip ? 'opacity-70 pointer-events-none' : ''
+              }`}
             >
-              {isExporting ? (
+              {isExportingZip ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Download className="w-3.5 h-3.5" />
               )}
-              <span>تنزيل الكل (.ZIP)</span>
-            </button>
+              <span>{isExportingZip ? 'جاري تجهيز (.ZIP)...' : 'تنزيل الكل (.ZIP)'}</span>
+            </a>
           </div>
         </div>
       )}

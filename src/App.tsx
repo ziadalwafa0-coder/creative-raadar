@@ -1,6 +1,4 @@
-import React, { useEffect, useState } from 'react';
-import { bindFileDragOverlay } from './utils/fileDragOverlay.ts';
-import { CustomerReviewsApp } from '../frontend/CustomerReviewsApp';
+import React, { useEffect, useState, useRef } from 'react';
 import { AppProvider, useApp } from './context/AppContext.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { LoginView } from './components/LoginView.tsx';
@@ -20,28 +18,48 @@ const MainContent: React.FC = () => {
     currentProject,
     toast,
     setDroppedFile,
-    setCurrentProject,
-    setActiveTab,
     showToast,
   } = useApp();
 
   const [isWindowDragging, setIsWindowDragging] = useState(false);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
-  useEffect(() => { setIsManualModalOpen(false); }, [currentProject?.id]);
+  const dragCounter = useRef(0);
 
   useEffect(() => {
-    setIsWindowDragging(false);
     if (!isAuthenticated) return;
-    const unbindOverlay = bindFileDragOverlay(window, setIsWindowDragging);
+
+    const handleWindowDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current += 1;
+      if (e.dataTransfer?.types?.includes('Files')) {
+        setIsWindowDragging(true);
+      }
+    };
+
+    const handleWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    const handleWindowDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current -= 1;
+      if (dragCounter.current <= 0) {
+        dragCounter.current = 0;
+        setIsWindowDragging(false);
+      }
+    };
 
     const handleWindowDrop = (e: DragEvent) => {
       e.preventDefault();
+      dragCounter.current = 0;
+      setIsWindowDragging(false);
 
       if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         const file = e.dataTransfer.files[0];
         if (file.type.startsWith('image/')) {
-          setCurrentProject(null);
-          setActiveTab('search');
           setDroppedFile(file);
         } else {
           showToast('يرجى إفلات ملف صورة صالح (PNG, JPG, WebP)', 'error');
@@ -57,8 +75,6 @@ const MainContent: React.FC = () => {
         if (items[i].type.startsWith('image/')) {
           const file = items[i].getAsFile();
           if (file) {
-            setCurrentProject(null);
-            setActiveTab('search');
             setDroppedFile(file);
             break;
           }
@@ -66,11 +82,16 @@ const MainContent: React.FC = () => {
       }
     };
 
+    window.addEventListener('dragenter', handleWindowDragEnter);
+    window.addEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('dragleave', handleWindowDragLeave);
     window.addEventListener('drop', handleWindowDrop);
     window.addEventListener('paste', handleWindowPaste);
 
     return () => {
-      unbindOverlay();
+      window.removeEventListener('dragenter', handleWindowDragEnter);
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('dragleave', handleWindowDragLeave);
       window.removeEventListener('drop', handleWindowDrop);
       window.removeEventListener('paste', handleWindowPaste);
     };
@@ -115,11 +136,14 @@ const MainContent: React.FC = () => {
           ) : (
             <div className="space-y-4">
               <JobProgress
-                key={currentProject.id}
+                key={`progress-${currentProject.id}`}
                 project={currentProject}
                 onOpenManualModal={() => setIsManualModalOpen(true)}
               />
-              <ResultsGallery key={currentProject.id} project={currentProject} />
+              <ResultsGallery
+                key={`gallery-${currentProject.id}`}
+                project={currentProject}
+              />
             </div>
           )
         ) : (
@@ -128,7 +152,6 @@ const MainContent: React.FC = () => {
       </main>
 
       <ManualLinkModal
-        key={currentProject?.id || 'new'}
         isOpen={isManualModalOpen}
         onClose={() => setIsManualModalOpen(false)}
         projectId={currentProject?.id}
@@ -161,7 +184,6 @@ const MainContent: React.FC = () => {
 };
 
 export default function App() {
-  if (import.meta.env.VITE_REVIEWS_API_URL) return <ErrorBoundary><CustomerReviewsApp api={import.meta.env.VITE_REVIEWS_API_URL.replace(/\/$/,'')} /></ErrorBoundary>;
   return (
     <ErrorBoundary>
       <AppProvider>

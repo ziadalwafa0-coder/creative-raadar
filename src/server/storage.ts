@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Project, CandidateAsset, WorkspaceUsage } from '../types/index.ts';
+import type { Project, CandidateAsset, WorkspaceUsage } from '../types/index.ts';
 import { PRIMARY_USER_OWNER_ID } from './auth.ts';
-import { DATA_DIR } from './runtimePaths.ts';
+import { DATA_DIR, DOWNLOADS_DIR, MAX_CACHE_BYTES } from './config.ts';
 
 const DB_FILE = path.join(DATA_DIR, 'reviewscout_db.json');
 
@@ -19,7 +19,7 @@ const defaultUsage: WorkspaceUsage = {
   verifiedDownloadsUsed: 0,
   verifiedDownloadsLimit: 250,
   storageUsedBytes: 0,
-  storageLimitBytes: 5 * 1024 * 1024 * 1024, // 5 GB
+  storageLimitBytes: MAX_CACHE_BYTES,
   activeProjects: 0,
 };
 
@@ -59,6 +59,13 @@ function sanitizeProject(project: Project): Project {
   );
 
   for (const asset of candidates) {
+    if (asset.localFilePath && !fs.existsSync(asset.localFilePath)) {
+      const migratedPath = path.join(DOWNLOADS_DIR, path.basename(asset.localFilePath));
+      if (fs.existsSync(migratedPath)) {
+        asset.localFilePath = migratedPath;
+      }
+    }
+
     if (asset.downloadStatus === 'verified_available') {
       let valid = false;
       try {
@@ -77,9 +84,16 @@ function sanitizeProject(project: Project): Project {
         }
       } catch {}
       if (!valid) {
-        asset.downloadStatus = 'source_only';
         asset.localFilePath = undefined;
-        asset.downloadError = 'الملف القديم لم يجتز التحقق؛ أضف رابط فيديو صالحاً.';
+        const hasValidRemoteMedia =
+          asset.mediaUrl &&
+          (asset.mediaUrl.startsWith('https://') || asset.mediaUrl.startsWith('http://')) &&
+          !asset.mediaUrl.includes('youtube.com') &&
+          !asset.mediaUrl.includes('youtu.be');
+        if (!hasValidRemoteMedia) {
+          asset.downloadStatus = 'source_only';
+          asset.downloadError = 'الملف القديم لم يجتز التحقق؛ أضف رابط فيديو صالحاً.';
+        }
       }
     }
   }
@@ -141,9 +155,8 @@ export class StorageService {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    const downloadsDir = path.join(DATA_DIR, 'downloads');
-    if (!fs.existsSync(downloadsDir)) {
-      fs.mkdirSync(downloadsDir, { recursive: true });
+    if (!fs.existsSync(DOWNLOADS_DIR)) {
+      fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
     }
   }
 
@@ -151,28 +164,9 @@ export class StorageService {
     try {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        const backup1 = path.join(DATA_DIR, 'reviewscout_before_real_results_fix.json');
-        if (!fs.existsSync(backup1)) fs.copyFileSync(DB_FILE, backup1);
-
-        const backupAuth = path.join(DATA_DIR, 'reviewscout_before_auth_migration.json');
-        if (!fs.existsSync(backupAuth)) fs.copyFileSync(DB_FILE, backupAuth);
-
         const parsed = JSON.parse(raw);
         const rawProjects: Record<string, Project> = parsed.projects || {};
         let needsSave = false;
-
-        if (fs.existsSync(backupAuth)) {
-          try {
-            const backupParsed = JSON.parse(fs.readFileSync(backupAuth, 'utf-8'));
-            const backupProjects: Record<string, Project> = backupParsed.projects || {};
-            for (const [bId, bProj] of Object.entries(backupProjects)) {
-              if (!rawProjects[bId]) {
-                rawProjects[bId] = bProj;
-                needsSave = true;
-              }
-            }
-          } catch {}
-        }
 
         const sanitizedProjects: Record<string, Project> = {};
 
@@ -182,9 +176,6 @@ export class StorageService {
             needsSave = true;
           }
 
-          // Idempotent migration of legacy projects to owner identities:
-          // - Fixtures and automated test runs are isolated to 'legacy_isolated_fixture'
-          // - Real user projects created prior to owner_* auth are linked to PRIMARY_USER_OWNER_ID (zals)
           if (isTestOrFixtureProject(p)) {
             if (p.sessionId !== 'legacy_isolated_fixture' && !p.id.startsWith('proj-seed-')) {
               p.sessionId = 'legacy_isolated_fixture';
@@ -273,6 +264,14 @@ export class StorageService {
 
     if (!ownerId || project.sessionId !== ownerId) {
       return false;
+    }
+
+    for (const asset of project.candidates || []) {
+      if (asset.localFilePath && fs.existsSync(asset.localFilePath)) {
+        try {
+          fs.unlinkSync(asset.localFilePath);
+        } catch {}
+      }
     }
 
     delete this.db.projects[id];

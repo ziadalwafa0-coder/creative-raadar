@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSafeExternalUrl, sanitizeCsvField, computeSha256 } from '../utils/security.ts';
+import { isSafeExternalUrl, sanitizeCsvField, computeSha256 } from '../utils/security.server.ts';
 import {
   isQuotaExhaustedError,
   isTransientUnavailableError,

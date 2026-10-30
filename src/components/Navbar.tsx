@@ -1,21 +1,17 @@
 import React from 'react';
 import { useApp } from '../context/AppContext.tsx';
-import { Compass, FolderKanban, Radar, LogOut } from 'lucide-react';
+import { Compass, Radar, LogOut } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
-  const { activeTab, setActiveTab, currentProject, setCurrentProject, projects, logout } = useApp();
+  const { activeTab, setActiveTab, currentProject, setCurrentProject, logout, cancelStreamingSearch } = useApp();
 
   const handleNewSearchClick = () => {
+    cancelStreamingSearch();
     setCurrentProject(null);
     setActiveTab('search');
   };
 
-  const handleProjectsClick = () => {
-    setActiveTab('projects');
-  };
-
   const isSearchActive = activeTab === 'search' && !currentProject;
-  const isProjectsActive = activeTab === 'projects';
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200/80">
@@ -43,7 +39,7 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={handleNewSearchClick}
-              className={`flex items-center gap-1.5 px-2 sm:px-3.5 py-1.5 rounded-lg text-[11px] sm:text-sm font-bold whitespace-nowrap transition-all cursor-pointer ${
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-lg text-[11px] sm:text-sm font-bold whitespace-nowrap transition-all cursor-pointer ${
                 isSearchActive
                   ? 'bg-[#247C72] text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -51,30 +47,6 @@ export const Navbar: React.FC = () => {
             >
               <Compass className="hidden sm:inline-block w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
               <span>بحث جديد</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleProjectsClick}
-              className={`flex items-center gap-1 px-2 sm:px-3.5 py-1.5 rounded-lg text-[11px] sm:text-sm font-bold whitespace-nowrap transition-all cursor-pointer ${
-                isProjectsActive
-                  ? 'bg-[#247C72] text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <FolderKanban className="hidden sm:inline-block w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-              <span>مشاريعي</span>
-              {projects.length > 0 && (
-                <span
-                  className={`text-[10px] sm:text-[11px] font-bold px-1.5 py-0.2 rounded-full ${
-                    isProjectsActive
-                      ? 'bg-white/20 text-white'
-                      : 'bg-slate-200/90 text-slate-700'
-                  }`}
-                >
-                  {projects.length}
-                </span>
-              )}
             </button>
           </nav>
 

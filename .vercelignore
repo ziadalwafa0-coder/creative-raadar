@@ -1,6 +1,10 @@
+.git
 .data
 .aistudio
 .env*
 !.env.example
-temp_*.txt
-simulation-before.ts
+node_modules
+dist
+coverage
+*.log
+bun.lock

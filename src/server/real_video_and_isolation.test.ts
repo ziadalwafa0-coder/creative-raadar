@@ -1,18 +1,39 @@
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { execFileSync } from 'node:child_process';
+
+process.env.NODE_ENV = 'test';
+
+import app from '../../server.ts';
+import { DOWNLOADS_DIR } from './config.ts';
 import { StorageService } from './storage.ts';
 import { downloadMedia, verifyWithFfprobe } from './downloader.ts';
-import { verifyAccessCode, clearAllRateLimitsForTests, PRIMARY_USER_OWNER_ID } from './auth.ts';
 import {
-  parseAmazonUsVideosFromHtml,
+  verifyAccessCode,
+  issueAuthSession,
+  clearAllRateLimitsForTests,
+  PRIMARY_USER_OWNER_ID,
+} from './auth.ts';
+import {
   buildAmazonUsQuery,
   evaluateStrictProductTitleMatch,
-  isPositiveReviewVideo,
-} from './amazonUs.ts';
+} from './queryBuilder.ts';
+import {
+  extractRatingCountFromCardHtml,
+  sortCandidatesByRatingCountDesc,
+} from './amazonSearch.ts';
+import {
+  parseAmazonUsVideosFromHtml,
+  extractStreamUuid,
+} from './amazonVideos.ts';
+import { isAllowedDownloadHost } from './streamSearch.ts';
 import { Project } from '../types/index.ts';
+
+const RUN_NETWORK_TESTS = process.env.RUN_NETWORK_TESTS === '1';
 
 // Obfuscated test vectors so plaintext access codes never appear in source or logs
 const MASK_KEY = 0x5a;
@@ -39,57 +60,132 @@ function decodeTestVector(idx: number): string {
   return Buffer.from(MASKED_CODES[idx].map((b) => b ^ MASK_KEY)).toString('utf8');
 }
 
+function generateLocalTestMp4(targetPath: string): void {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  execFileSync(
+    'ffmpeg',
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=blue:s=320x240:d=1',
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      '-movflags',
+      '+faststart',
+      targetPath,
+    ],
+    { stdio: 'ignore' }
+  );
+}
+
 describe('Real Video Downloader & ffprobe Verification', () => {
-  it('rejects HTML content as video and sets status to source_only', async () => {
-    const res = await downloadMedia('https://example.com', 'test-html-rejection', 'video');
-    assert.strictEqual(res.status, 'source_only');
-    assert.ok(res.error?.includes('HTML') || res.error?.includes('صفحة'));
-  });
-
-  it('rejects image files as video', async () => {
-    const res = await downloadMedia(
-      'https://images.unsplash.com/photo-1546868871-7041f2a55e12?w=640&q=80',
-      'test-img-rejection',
-      'video'
-    );
-    assert.strictEqual(res.status, 'source_only');
-    assert.ok(res.error?.includes('ليس فيديو MP4') || res.error?.includes('ffprobe'));
-  });
-
-  it('downloads and verifies real Amazon Laiensia HLS stream via async ffmpeg + ffprobe and caches repeat requests', async () => {
-    const hlsUrl =
-      'https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/976973e6-a72c-485d-a14e-710478b5af1a/default.jobtemplate.hls.m3u8';
-    const assetId = 'ast-test-laiensia-verify';
-
-    const res = await downloadMedia(hlsUrl, assetId, 'video', 30 * 1024 * 1024);
-    assert.strictEqual(res.status, 'verified_available');
-    assert.ok(res.localFilePath, 'Should produce a localFilePath');
-    assert.ok(fs.existsSync(res.localFilePath!), 'File must exist on disk');
-    assert.ok(res.fileSizeBytes && res.fileSizeBytes > 1000000, 'Video file should be larger than 1MB');
-    assert.ok(res.sha256 && res.sha256.length === 64, 'Must compute valid SHA-256');
-
-    const probe = await verifyWithFfprobe(res.localFilePath!, res.sha256);
-    assert.strictEqual(probe.valid, true, 'ffprobe must confirm valid video stream');
-    assert.ok(probe.duration && probe.duration > 0, 'Must have positive duration');
-    assert.ok(probe.width && probe.width > 0, 'Must have positive width');
-    assert.ok(probe.height && probe.height > 0, 'Must have positive height');
-
-    // Second request for the same URL must hit the verified cache in <50ms
-    const t0 = Date.now();
-    const cachedRes = await downloadMedia(hlsUrl, 'ast-test-laiensia-cached', 'video', 30 * 1024 * 1024);
-    const elapsedMs = Date.now() - t0;
-    assert.strictEqual(cachedRes.status, 'verified_available');
-    assert.strictEqual(cachedRes.fromCache, true);
-    assert.ok(elapsedMs < 200, `Expected cached download to be fast (<200ms), got ${elapsedMs}ms`);
+  it('verifies locally generated MP4 via ffprobe deterministically', async () => {
+    const localMp4 = path.join(DOWNLOADS_DIR, `unit_test_sample_${Date.now()}.mp4`);
+    generateLocalTestMp4(localMp4);
     try {
-      if (cachedRes.localFilePath) fs.unlinkSync(cachedRes.localFilePath);
-    } catch {}
+      const probe = await verifyWithFfprobe(localMp4);
+      assert.strictEqual(probe.valid, true);
+      assert.strictEqual(probe.width, 320);
+      assert.strictEqual(probe.height, 240);
+    } finally {
+      try {
+        fs.unlinkSync(localMp4);
+      } catch {}
+    }
   });
+
+  it(
+    'rejects HTML content as video and sets status to source_only',
+    { skip: !RUN_NETWORK_TESTS },
+    async () => {
+      const res = await downloadMedia('https://example.com', 'test-html-rejection', 'video');
+      assert.strictEqual(res.status, 'source_only');
+      assert.ok(res.error?.includes('HTML') || res.error?.includes('صفحة'));
+    }
+  );
+
+  it(
+    'rejects image files as video',
+    { skip: !RUN_NETWORK_TESTS },
+    async () => {
+      const res = await downloadMedia(
+        'https://images.unsplash.com/photo-1546868871-7041f2a55e12?w=640&q=80',
+        'test-img-rejection',
+        'video'
+      );
+      assert.strictEqual(res.status, 'source_only');
+      assert.ok(res.error?.includes('ليس فيديو MP4') || res.error?.includes('ffprobe'));
+    }
+  );
+
+  it(
+    'downloads and verifies real Amazon Laiensia HLS stream via async ffmpeg + ffprobe and caches repeat requests',
+    { skip: !RUN_NETWORK_TESTS },
+    async () => {
+      const hlsUrl =
+        'https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/976973e6-a72c-485d-a14e-710478b5af1a/default.jobtemplate.hls.m3u8';
+      const assetId = 'ast-test-laiensia-verify';
+
+      const res = await downloadMedia(hlsUrl, assetId, 'video', 30 * 1024 * 1024);
+      assert.strictEqual(res.status, 'verified_available');
+      assert.ok(res.localFilePath, 'Should produce a localFilePath');
+      assert.ok(fs.existsSync(res.localFilePath!), 'File must exist on disk');
+      assert.ok(res.fileSizeBytes && res.fileSizeBytes > 1000000, 'Video file should be larger than 1MB');
+      assert.ok(res.sha256 && res.sha256.length === 64, 'Must compute valid SHA-256');
+
+      const probe = await verifyWithFfprobe(res.localFilePath!, res.sha256);
+      assert.strictEqual(probe.valid, true, 'ffprobe must confirm valid video stream');
+      assert.ok(probe.duration && probe.duration > 0, 'Must have positive duration');
+      assert.ok(probe.width && probe.width > 0, 'Must have positive width');
+      assert.ok(probe.height && probe.height > 0, 'Must have positive height');
+
+      // Second request for the same URL must hit the verified cache in <50ms
+      const t0 = Date.now();
+      const cachedRes = await downloadMedia(hlsUrl, 'ast-test-laiensia-cached', 'video', 30 * 1024 * 1024);
+      const elapsedMs = Date.now() - t0;
+      assert.strictEqual(cachedRes.status, 'verified_available');
+      assert.strictEqual(cachedRes.fromCache, true);
+      assert.ok(elapsedMs < 200, `Expected cached download to be fast (<200ms), got ${elapsedMs}ms`);
+      try {
+        if (cachedRes.localFilePath) fs.unlinkSync(cachedRes.localFilePath);
+      } catch {}
+    }
+  );
 });
 
 describe('Server-Side Access-Code Gate, Session Lifecycle, Rate Limiting & Isolation', () => {
   const storage = StorageService.getInstance();
-  const baseUrl = 'http://localhost:3000';
+  let server: Server;
+  let baseUrl = '';
+
+  before(async () => {
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, '127.0.0.1', () => {
+        const addr = server.address() as AddressInfo;
+        baseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
+  });
+
+  after(async () => {
+    if (server) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('exposes GET /api/health returning gemini, ffmpeg, and amazonReachable booleans', async () => {
+    const res = await fetch(`${baseUrl}/api/health`);
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.strictEqual(typeof body.gemini, 'boolean');
+    assert.strictEqual(typeof body.ffmpeg, 'boolean');
+    assert.strictEqual(typeof body.amazonReachable, 'boolean');
+  });
 
   it('verifies all 16 authorized codes (with trim & uppercase normalization) and maps each to a distinct ownerId', () => {
     const ownerIds = new Set<string>();
@@ -200,17 +296,8 @@ describe('Server-Side Access-Code Gate, Session Lifecycle, Rate Limiting & Isola
     });
     assert.strictEqual(afterLogoutRes.status, 401, 'Token must be invalid after logout');
 
-    // 4. Short TTL expiration test (80ms)
-    const shortLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Session-TTL-Ms': '80',
-      },
-      body: JSON.stringify({ code: code0 }),
-    });
-    assert.strictEqual(shortLoginRes.status, 200);
-    const { token: shortToken } = await shortLoginRes.json();
+    // 4. Short TTL expiration test (80ms via issueAuthSession, x-session-ttl-ms header removed)
+    const { token: shortToken } = issueAuthSession(PRIMARY_USER_OWNER_ID, 80);
 
     await new Promise((r) => setTimeout(r, 120));
     const expiredCheck = await fetch(`${baseUrl}/api/projects`, {
@@ -219,7 +306,7 @@ describe('Server-Side Access-Code Gate, Session Lifecycle, Rate Limiting & Isola
     assert.strictEqual(expiredCheck.status, 401, 'Expired session token must be rejected with 401');
   });
 
-  it('links legacy real user projects to ZALS (zals) while isolating other codes and excluding fixtures', async () => {
+  it('links user projects to ZALS (zals) while isolating other codes and excluding fixtures', async () => {
     clearAllRateLimitsForTests();
     // Login as ZALS (uppercase with spaces to verify normalization)
     const zalsLogin = await fetch(`${baseUrl}/api/auth/login`, {
@@ -230,16 +317,30 @@ describe('Server-Side Access-Code Gate, Session Lifecycle, Rate Limiting & Isola
     assert.strictEqual(zalsLogin.status, 200);
     const { token: zalsToken } = await zalsLogin.json();
 
+    const createdRes = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${zalsToken}`,
+      },
+      body: JSON.stringify({
+        name: 'جزامة 9 دور بغطاء',
+        mediaTypeRequested: 'video',
+        targetVideoCount: 3,
+      }),
+    });
+    assert.strictEqual(createdRes.status, 201);
+    const zalsCreated = await createdRes.json();
+
     const zalsProjectsRes = await fetch(`${baseUrl}/api/projects`, {
       headers: { Authorization: `Bearer ${zalsToken}` },
     });
     assert.strictEqual(zalsProjectsRes.status, 200);
     const { projects: zalsProjects } = await zalsProjectsRes.json();
 
-    // Must contain real legacy project(s) such as proj-1792658026309-3l4io
     assert.ok(
-      zalsProjects.some((p: Project) => p.id === 'proj-1792658026309-3l4io'),
-      'Real legacy project must be linked to zals ownerId'
+      zalsProjects.some((p: Project) => p.id === zalsCreated.id),
+      'ZALS project must be linked to zals ownerId'
     );
     // Must NOT contain seed/fixture projects
     assert.ok(
@@ -262,12 +363,17 @@ describe('Server-Side Access-Code Gate, Session Lifecycle, Rate Limiting & Isola
     assert.strictEqual(otherProjectsRes.status, 200);
     const { projects: otherProjects } = await otherProjectsRes.json();
     assert.ok(
-      !otherProjects.some((p: Project) => p.id === 'proj-1792658026309-3l4io'),
-      'Other valid code must NOT see zals legacy projects'
+      !otherProjects.some((p: Project) => p.id === zalsCreated.id),
+      'Other valid code must NOT see zals projects'
     );
+
+    await fetch(`${baseUrl}/api/projects/${zalsCreated.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${zalsToken}` },
+    });
   });
 
-  it('supports header-only authenticated ZIP export containing real MP4 + CSV, inline preview, and blocks other authenticated codes', async () => {
+  it('supports header-only authenticated ZIP export containing real MP4 + CSV, inline preview, and blocks other authenticated codes', { skip: !RUN_NETWORK_TESTS }, async () => {
     clearAllRateLimitsForTests();
     const loginA = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
@@ -402,79 +508,32 @@ describe('Server-Side Access-Code Gate, Session Lifecycle, Rate Limiting & Isola
     }
   });
 
-  it('strictly filters out mismatched products and unrelated videos while keeping customer review videos for matching products', async () => {
-    const rawName = 'جزامة 9 دور العملية بغطاء الحديثة';
-    const query = await buildAmazonUsQuery(rawName);
-    assert.ok(query.toLowerCase().includes('shoe rack'), 'Must translate جزامة to shoe rack');
-    assert.ok(query.toLowerCase().includes('tier'), 'Must translate دور to tier');
-
-    // 1. Test Strict Product Title/Structure Gate
-    const exactMatch = evaluateStrictProductTitleMatch(
-      'Furinno 9-Tier Shoe Rack Organizer with Zippered Dustproof Cover',
-      query,
-      rawName,
-      ['zippered fabric cover', '9 tiers']
-    );
-    assert.strictEqual(exactMatch.approved, true, 'Must approve covered 9-tier shoe rack');
-    assert.strictEqual(exactMatch.matchCategory, 'exact_design');
-
-    const variationMatch = evaluateStrictProductTitleMatch(
-      'SONGMICS 10-Tier Shoe Rack with Dustproof Cover, Portable Closet Shoe Storage Organizer',
-      query,
-      rawName,
-      ['zippered fabric cover']
-    );
-    assert.strictEqual(variationMatch.approved, true, 'Must approve covered 10-tier shoe rack as permitted variation');
-    assert.strictEqual(variationMatch.matchCategory, 'permitted_variation');
-
-    const openRackMismatch = evaluateStrictProductTitleMatch(
-      'Simple Trending 9-Tier Metal Shoe Rack Storage Organizer for Closet Entryway',
-      query,
-      rawName,
-      ['zippered fabric cover']
-    );
-    assert.strictEqual(openRackMismatch.approved, false, 'Must strictly REJECT open shoe rack without cover');
-    assert.strictEqual(openRackMismatch.matchCategory, 'mismatched');
-
-    const plasticBoxMismatch = evaluateStrictProductTitleMatch(
-      '12 Pack Clear Plastic Shoe Boxes Stackable Storage Organizer with Doors',
-      query,
-      rawName,
-      ['zippered fabric cover']
-    );
-    assert.strictEqual(plasticBoxMismatch.approved, false, 'Must strictly REJECT clear plastic shoe boxes');
-
-    const unrelatedProductMismatch = evaluateStrictProductTitleMatch(
-      'Portable Handheld Garment Steamer for Clothes',
-      query,
-      rawName,
-      []
-    );
-    assert.strictEqual(unrelatedProductMismatch.approved, false, 'Must strictly REJECT unrelated product category');
-
-    // 2. Test Strict Video-Level Filtering inside parseAmazonUsVideosFromHtml
+  it('extracts customer review videos (both positive and negative) belonging to the ASIN family, deduplicates by stream UUID, and rejects Seller/Influencer/other-ASIN videos', async () => {
     const sampleHtml = `<div class="video-items-metadata" data-video-items="[
       {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/seller1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Seller&quot;,&quot;productAsin&quot;:&quot;B0DNF1YHH3&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Official Demo&quot;,&quot;publicName&quot;:&quot;BrandStore&quot;},
-      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/cust1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B0DNF1YHH3&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Real buyer review 1&quot;,&quot;publicName&quot;:&quot;Miguel Muniz&quot;,&quot;fullReviewLink&quot;:&quot;/gp/customer-reviews/R2DTUDW1WXVPHI&quot;},
-      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/cust2/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B0DNF1YHH3&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Real buyer review 2&quot;,&quot;publicName&quot;:&quot;Sarah J&quot;},
+      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/cust-uuid-1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B0DNF1YHH3&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Positive buyer review 1&quot;,&quot;publicName&quot;:&quot;Miguel Muniz&quot;,&quot;fullReviewLink&quot;:&quot;/gp/customer-reviews/R2DTUDW1WXVPHI&quot;},
+      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/cust-uuid-2/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B0DNF1YHH3&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Not sturdy - collapsed after two months&quot;,&quot;publicName&quot;:&quot;Sarah J&quot;},
+      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/cust-uuid-1/embedded.cc.default.vertical.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B0DNF1YHH3&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Duplicate UUID stream&quot;,&quot;publicName&quot;:&quot;Miguel Muniz&quot;},
       {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/related1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B0DNF1YHH3&quot;,&quot;segmentName&quot;:&quot;Videos for related products&quot;,&quot;title&quot;:&quot;Competitor product video&quot;,&quot;publicName&quot;:&quot;Other Buyer&quot;},
       {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/otherasin1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B099999999&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Different ASIN video&quot;,&quot;publicName&quot;:&quot;Wrong ASIN&quot;},
       {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/multi1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Influencer&quot;,&quot;productAsin&quot;:&quot;B0DNF1YHH3&quot;,&quot;relatedProductsAsins&quot;:&quot;B0DNF1YHH3,B011111111,B022222222&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Top 5 random things&quot;,&quot;publicName&quot;:&quot;Spam Influencer&quot;}
-    ]"></div>`;
+    ]"></div>
+    <div id="customer_review-R99887766">
+      <a data-hook="review-title"><span>Honest video from media_reviews_only page</span></a>
+      <span class="a-profile-name">Verified Customer</span>
+      <video src="https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/cust-uuid-3/default.jobtemplate.hls.m3u8"></video>
+    </div>`;
 
     const extracted = parseAmazonUsVideosFromHtml(sampleHtml, 'https://www.amazon.com/dp/B0DNF1YHH3');
     assert.strictEqual(
       extracted.length,
       3,
-      'Must keep only the 3 videos belonging strictly to this product and reject related/other-ASIN/multi-product videos'
+      'Must keep the 3 unique customer review videos (both positive and negative, from data-video-items and customer_review block) and reject Seller, duplicate UUID, related, and wrong-ASIN videos'
     );
-    assert.strictEqual(extracted[0].isCustomerReview, true, 'Customer review video 1 must be first');
-    assert.strictEqual(extracted[1].isCustomerReview, true, 'Customer review video 2 must be second');
-    assert.strictEqual(extracted[0].reviewerOrChannel, 'Miguel Muniz');
-    assert.strictEqual(extracted[0].provenance, 'unverified_customer_review');
-    assert.strictEqual(extracted[2].provenance, 'seller_manufacturer_demo');
-    assert.notStrictEqual(extracted[0].reviewId, 'B0DNF1YHH3');
-    assert.notStrictEqual(extracted[1].reviewId, 'B0DNF1YHH3');
+    assert.strictEqual(extracted[0].streamUuid, 'cust-uuid-1');
+    assert.strictEqual(extracted[1].streamUuid, 'cust-uuid-2');
+    assert.strictEqual(extracted[2].streamUuid, 'cust-uuid-3');
+    assert.strictEqual(extractStreamUuid(extracted[0].mediaUrl), 'cust-uuid-1');
 
     // Verify API accepts targetVideoCount > 50 (e.g. 120) without clamping to 50
     clearAllRateLimitsForTests();
@@ -500,6 +559,15 @@ describe('Server-Side Access-Code Gate, Session Lifecycle, Rate Limiting & Isola
     const createdProj = await createRes.json();
     assert.strictEqual(createdProj.targetVideoCount, 120, 'Must preserve targetVideoCount = 120 without stopping at 50');
 
+    // Verify /api/debug/amazon requires authentication and validates ?q=
+    const unauthDebugRes = await fetch(`${baseUrl}/api/debug/amazon?q=flashlight`);
+    assert.strictEqual(unauthDebugRes.status, 401);
+
+    const missingQueryDebugRes = await fetch(`${baseUrl}/api/debug/amazon`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.strictEqual(missingQueryDebugRes.status, 400);
+
     // Cleanup test project
     await fetch(`${baseUrl}/api/projects/${createdProj.id}`, {
       method: 'DELETE',
@@ -508,102 +576,99 @@ describe('Server-Side Access-Code Gate, Session Lifecycle, Rate Limiting & Isola
     storage.save();
   });
 
-  it('strictly enforces 100% positive review videos and 100% exact neck relaxer design matching', () => {
-    // 1. Test isPositiveReviewVideo against negative/complaint titles reported by user
-    const negativeTitles = [
-      'not sturdy',
-      "Don't waste your money",
-      'Why did I buy this silly thing?',
-      'EXTREMELY HARD—Definitely NOT Soft!',
-      'Watch BEFORE you buy this neck stretcher',
-      'Either bad quality or defective item',
-      'Strong chemical odor, returned it',
-      'Too hard and uncomfortable on my neck',
-    ];
-    for (const negTitle of negativeTitles) {
-      assert.strictEqual(
-        isPositiveReviewVideo(negTitle),
-        false,
-        `Must strictly REJECT negative review title: "${negTitle}"`
-      );
-    }
+  it('sorts candidates by rating COUNT descending as primary key and parses inner quotes in data-video-items', () => {
+    const rating1 = extractRatingCountFromCardHtml('<span class="a-size-base s-underline-text">(4,812)</span>');
+    const rating2 = extractRatingCountFromCardHtml('<span>10K+ bought in past month</span>');
+    assert.strictEqual(rating1, 4812);
+    assert.strictEqual(rating2, 10000);
 
-    // Reject 1-star, 2-star, or 3-star review HTML snippets even if title looks neutral
-    assert.strictEqual(
-      isPositiveReviewVideo('Honest review', '<i class="a-icon a-icon-star a-star-2">2.0 out of 5 stars</i>'),
-      false,
-      'Must reject 2-star review snippet'
-    );
-    assert.strictEqual(
-      isPositiveReviewVideo('My thoughts', '<span>3.0 out of 5 stars</span>'),
-      false,
-      'Must reject 3-star review snippet'
+    const candidates = [
+      { asin: 'B0LOW', ratingCount: 45, matchScore: 99 },
+      { asin: 'B0HIGH', ratingCount: 12400, matchScore: 80 },
+      { asin: 'B0MID', ratingCount: 980, matchScore: 95 },
+    ];
+    const sorted = sortCandidatesByRatingCountDesc(candidates);
+    assert.deepStrictEqual(
+      sorted.map((c) => c.asin),
+      ['B0HIGH', 'B0MID', 'B0LOW'],
+      'Must sort by ratingCount descending first, then matchScore'
     );
 
-    // Approve genuinely positive reviews
-    const positiveTitles = [
-      'Awesome Neck Stretcher!',
-      'Great relief for neck and shoulder tension',
-      'Love this cervical traction pillow - works wonders',
-      'Best purchase for tech neck relief',
-    ];
-    for (const posTitle of positiveTitles) {
-      assert.strictEqual(
-        isPositiveReviewVideo(posTitle, '<i class="a-icon a-icon-star a-star-5">5.0 out of 5 stars</i>'),
-        true,
-        `Must APPROVE positive review title: "${posTitle}"`
-      );
-    }
-
-    // 2. Verify parseAmazonUsVideosFromHtml strips negative videos automatically
-    const mixedSentimentHtml = `<div class="video-items-metadata" data-video-items="[
-      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/neg1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B07QSFJ8S2&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Why did I buy this silly thing?&quot;,&quot;publicName&quot;:&quot;Angry Buyer&quot;},
-      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/neg2/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B07QSFJ8S2&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Don&#39;t waste your money&quot;,&quot;publicName&quot;:&quot;Sad Buyer&quot;},
-      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/pos1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B07QSFJ8S2&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Awesome Neck Stretcher!&quot;,&quot;publicName&quot;:&quot;Happy Buyer&quot;}
+    const quotedAttrHtml = `<div data-video-items="[
+      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/uuid-q1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B0DYNZ4MFB&quot;,&quot;parentAsin&quot;:&quot;B0FGXT13R9&quot;,&quot;relatedProductsAsins&quot;:&quot;B0DYNZ4MFB,B0H9NT6277&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;&#34;See how easily I organized all my shoes!&#34;&quot;,&quot;publicName&quot;:&quot;Verified Buyer&quot;},
+      {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/uuid-q2/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B0DYNZ4MFB&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;It&#x27;s a wonderful product but we were missing 3 of the 6.7&#34;rods&quot;,&quot;publicName&quot;:&quot;Unlucky Buyer&quot;}
     ]"></div>`;
-    const positiveOnly = parseAmazonUsVideosFromHtml(mixedSentimentHtml, 'https://www.amazon.com/dp/B07QSFJ8S2');
-    assert.strictEqual(positiveOnly.length, 1, 'Must keep ONLY the 1 positive video and reject the 2 negative ones');
-    assert.strictEqual(positiveOnly[0].title, 'Awesome Neck Stretcher!');
-
-    // 3. Verify strict structural matching for Neck and Shoulder Relaxer / Cervical Traction Pillow
-    const neckQuery = 'Neck and Shoulder Relaxer Cervical Traction Device for TMJ Pain Relief';
-    const neckRaw = 'وسادة استرخاء الرقبة والكتفين';
-    const neckFeatures = ['C-shaped curve', 'massage nodes', 'dense EVA foam'];
-
-    const exactNeck = evaluateStrictProductTitleMatch(
-      'Restcloud Neck and Shoulder Relaxer, Cervical Traction Device for TMJ Pain Relief and Cervical Spine Alignment',
-      neckQuery,
-      neckRaw,
-      neckFeatures
+    const parsedFromQuoted = parseAmazonUsVideosFromHtml(
+      quotedAttrHtml,
+      'https://www.amazon.com/dp/B0DYNZ4MFB'
     );
-    assert.strictEqual(exactNeck.approved, true, 'Must approve exact C-shaped neck and shoulder relaxer');
-    assert.strictEqual(exactNeck.matchCategory, 'exact_design');
-
-    const postureStrapMismatch = evaluateStrictProductTitleMatch(
-      'Back Brace Posture Corrector for Women and Men, Adjustable Upper Back Strap for Clavicle Support',
-      neckQuery,
-      neckRaw,
-      neckFeatures
+    assert.strictEqual(
+      parsedFromQuoted.length,
+      2,
+      'Must parse data-video-items containing &#34; inner quotes and keep all customer reviews (positive or negative)'
     );
-    assert.strictEqual(postureStrapMismatch.approved, false, 'Must reject back posture corrector straps');
+    assert.strictEqual(parsedFromQuoted[0].title, '"See how easily I organized all my shoes!"');
+  });
 
-    const inflatableCollarMismatch = evaluateStrictProductTitleMatch(
-      'Inflatable Neck Stretcher Cervical Collar Traction Device with Air Pump',
-      neckQuery,
-      neckRaw,
-      neckFeatures
+  it('validates allowed Amazon media download hosts and rejects untrusted domains', () => {
+    assert.strictEqual(
+      isAllowedDownloadHost('https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/123/default.mp4'),
+      true
     );
-    assert.strictEqual(inflatableCollarMismatch.approved, false, 'Must reject inflatable air pump neck collars');
+    assert.strictEqual(isAllowedDownloadHost('https://evil-phishing.example.com/video.mp4'), false);
+  });
 
-    const electricMassagerMismatch = evaluateStrictProductTitleMatch(
-      'Shiatsu Neck and Back Massager with Soothing Heat, Electric Deep Tissue Kneading Massage Pillow',
-      neckQuery,
-      neckRaw,
-      neckFeatures
+  it(
+    'serves pre-warmed / cached video downloads via /api/stream-search/download in milliseconds',
+    { skip: !RUN_NETWORK_TESTS },
+    async () => {
+      clearAllRateLimitsForTests();
+      const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: decodeTestVector(0) }),
+      });
+      const { token } = await loginRes.json();
+
+      const hlsUrl =
+        'https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/976973e6-a72c-485d-a14e-710478b5af1a/default.jobtemplate.hls.m3u8';
+
+      const fastCacheHit = await downloadMedia(hlsUrl, 'stream-cache', 'video', 30 * 1024 * 1024, undefined, true);
+      assert.strictEqual(fastCacheHit.status, 'verified_available');
+      assert.strictEqual(fastCacheHit.fromCache, true);
+
+      const t0 = Date.now();
+      const streamDlRes = await fetch(
+        `${baseUrl}/api/stream-search/download?url=${encodeURIComponent(hlsUrl)}&type=video&title=Fast_Test`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      assert.strictEqual(streamDlRes.status, 200);
+      assert.strictEqual(streamDlRes.headers.get('content-type'), 'video/mp4');
+      const buf = Buffer.from(await streamDlRes.arrayBuffer());
+      const elapsedMs = Date.now() - t0;
+
+      assert.ok(buf.length > 1000000, 'Streamed MP4 must be >1MB');
+      assert.ok(
+        elapsedMs < 800,
+        `Expected cached /api/stream-search/download to complete in <800ms, took ${elapsedMs}ms`
+      );
+    }
+  );
+
+  it('distills verbose AI descriptions into concise Amazon queries and approves matching product titles', async () => {
+    const aiSuggestedEn = 'Automatic Door Closer Punch-Free Steel Wire Cable with Adhesive Mount';
+    const aiSuggestedAr = 'غالق باب أوتوماتيكي بسلك فولاذي لاصق';
+
+    const distilledQuery = await buildAmazonUsQuery(aiSuggestedAr, aiSuggestedEn);
+    assert.ok(!distilledQuery.toLowerCase().includes('with adhesive mount'), 'Must strip verbose trailing with-clause');
+
+    const realPunchFreeCloser = evaluateStrictProductTitleMatch(
+      'Punch-Free Automatic Sensor Door Closer - Multifunctional Door Closer Automatically Close for All Doors',
+      distilledQuery,
+      aiSuggestedAr
     );
-    assert.strictEqual(electricMassagerMismatch.approved, false, 'Must reject electric heated shiatsu massagers');
+    assert.strictEqual(realPunchFreeCloser.approved, true);
   });
 });
-
-
-

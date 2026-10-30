@@ -1,14 +1,13 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "installCommand": "npm ci",
   "buildCommand": "npm run build",
+  "installCommand": "npm ci --no-audit --no-fund",
   "outputDirectory": "dist",
-  "rewrites": [{"source":"/api/:path*","destination":"/api"}],
   "functions": {
-    "api/index.ts": {
-      "maxDuration": 60,
-      "excludeFiles": "{.data/**,.aistudio/**,public/**,dist/**,**/*.test.ts}"
-    }
-  }
+    "api/index.ts": { "maxDuration": 300, "excludeFiles": "{.data/**,.aistudio/**,.env*,node_modules/.cache/**}" }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
 }

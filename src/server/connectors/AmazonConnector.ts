@@ -1,5 +1,5 @@
-import { IConnector } from './types.ts';
-import {
+import type { IConnector } from './types.ts';
+import type {
   ProviderCapability,
   VisualAttribute,
   SearchSettings,
@@ -10,15 +10,15 @@ import {
 export class AmazonConnector implements IConnector {
   id = 'amazon' as const;
   name = 'Amazon Marketplace';
-  nameAr = 'أمازون (الولايات المتحدة والدول المدعومة)';
+  nameAr = 'أمازون (الولايات المتحدة)';
 
   capabilities(): ProviderCapability {
     return {
       id: 'amazon',
       name: 'Amazon Marketplace Connector',
-      nameAr: 'تكامل متجر أمازون العالمي',
-      description: 'Discovers verified customer reviews, customer unboxing videos, and customer-uploaded photos across Amazon marketplaces.',
-      descriptionAr: 'يكتشف مراجعات المشترين المؤكدة، وفيديوهات فتح الصندوق، وصور العملاء الحقيقية عبر متاجر أمازون.',
+      nameAr: 'تكامل متجر أمازون',
+      description: 'Discovers customer review videos and customer-uploaded photos on Amazon.',
+      descriptionAr: 'يكتشف فيديوهات مراجعات المشترين وصور العملاء الحقيقية على متجر أمازون.',
       state: 'ready',
       supportedOperations: {
         discovery: true,
@@ -29,8 +29,8 @@ export class AmazonConnector implements IConnector {
       },
       requiredSecrets: [],
       configuredSecrets: [],
-      notes: 'Supports Amazon US, UK, DE, FR, IT, ES, UAE, SA, and EG.',
-      notesAr: 'يدعم استخراج المراجعات الموثقة، شارات الشراء المؤكد، تقييمات Vine المجانية، وفيديوهات العرض.',
+      notes: 'Supports Amazon US customer review media.',
+      notesAr: 'يدعم استخراج فيديوهات وصور مراجعات العملاء من أمازون أمريكا.',
     };
   }
 
@@ -39,16 +39,15 @@ export class AmazonConnector implements IConnector {
   }
 
   extractAsin(url: string): string | null {
-    const match = url.match(/(?:\/dp\/|\/gp\/product\/|\/ASIN\/)([A-Z0-9]{10})/i);
+    const match = url.match(/(?:\/dp\/|\/gp\/product\/|\/product-reviews\/|\/ASIN\/)([A-Z0-9]{10})/i);
     return match ? match[1].toUpperCase() : null;
   }
 
   async searchCandidates(
-    profile: VisualAttribute,
-    settings: SearchSettings,
-    targetCount: number
+    _profile: VisualAttribute,
+    _settings: SearchSettings,
+    _targetCount: number
   ): Promise<Partial<CandidateAsset>[]> {
-    // We return structured candidates that can be populated through discovery
     return [];
   }
 
@@ -67,28 +66,25 @@ export class AmazonConnector implements IConnector {
     const isVine = url.toLowerCase().includes('vine') || url.includes('free-product');
     const isSellerVideo = url.includes('/vdp/') || url.includes('seller-video') || url.includes('creator-hub');
 
-    let provenance: ProvenanceClassification = 'verified_purchase_review';
-    let verifiedEvidence: string | undefined = 'شراء مؤكد من أمازون (Verified Purchase Badge)';
+    let provenance: ProvenanceClassification = 'unverified_customer_review';
     let incentive: string | undefined = undefined;
 
     if (isVine) {
       provenance = 'vine_free_product';
-      verifiedEvidence = undefined;
       incentive = 'عضو في برنامج Amazon Vine (استلم المنتج مجانًا مقابل تقييم)';
     } else if (isSellerVideo) {
       provenance = 'seller_manufacturer_demo';
-      verifiedEvidence = undefined;
       incentive = 'فيديو مرفوع من قِبل البائع أو العلامة التجارية';
     }
 
     return {
       title: asin ? `Amazon Product Asset [ASIN: ${asin}]` : 'Amazon Customer Review Asset',
-      reviewer: 'مشتري معتمد من أمازون',
+      reviewer: 'عميل أمازون',
       provenance,
-      verifiedPurchaseEvidence: verifiedEvidence,
+      verifiedPurchaseEvidence: undefined,
       incentiveDisclosure: incentive,
-      thumbnailUrl: 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?w=640&q=80',
-      durationSeconds: 48,
+      thumbnailUrl: undefined,
+      durationSeconds: undefined,
     };
   }
 
@@ -108,10 +104,9 @@ export class AmazonConnector implements IConnector {
       };
     }
 
-    // Direct public Amazon media URLs can be downloaded, otherwise marked as source only
     return {
       thumbnailUrl: candidate.thumbnailUrl,
-      canDownload: true,
+      canDownload: Boolean(candidate.thumbnailUrl),
       directMediaUrl: candidate.thumbnailUrl,
     };
   }

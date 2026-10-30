@@ -21,7 +21,7 @@ interface Props {
 }
 
 export const ProductProfileCard: React.FC<Props> = ({ project }) => {
-  const { t, showToast, commitProject, getSelectionEpoch, refreshProjects, apiFetch } = useApp();
+  const { t, showToast, setCurrentProject, refreshProjects } = useApp();
   const profile = project.productProfile;
 
   const [isEditing, setIsEditing] = useState(false);
@@ -33,17 +33,16 @@ export const ProductProfileCard: React.FC<Props> = ({ project }) => {
 
   const handleSave = async () => {
     if (!formData) return;
-    const epoch = getSelectionEpoch();
     setIsSaving(true);
     try {
-      const res = await apiFetch(`/api/projects/${project.id}`, {
+      const res = await fetch(`/api/projects/${project.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ productProfile: formData }),
       });
       if (res.ok) {
         const updated = await res.json();
-        if (!commitProject(updated, epoch)) return;
+        setCurrentProject(updated);
         await refreshProjects();
         setIsEditing(false);
         showToast('تم حفظ تعديلات مواصفات المنتج بنجاح!', 'success');

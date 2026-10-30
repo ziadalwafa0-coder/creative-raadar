@@ -1,38 +1,108 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
+import helmet from 'helmet';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
+import {
+  DATA_DIR,
+  DOWNLOADS_DIR,
+  GEMINI_API_KEY,
+  IS_PROD,
+  assertProductionConfig,
+} from './src/server/config.ts';
 import { StorageService } from './src/server/storage.ts';
-import { JobWorker } from './src/server/worker.ts';
 import { ProviderRegistry } from './src/server/connectors/ProviderRegistry.ts';
 import { analyzeProductImage, isGeminiConfigured } from './src/server/gemini.ts';
 import { streamExportArchive } from './src/server/exporter.ts';
-import { Project, SearchSettings } from './src/types/index.ts';
-import { prepareSearchIdentity, productInputFingerprint } from './src/utils/productIdentity.ts';
+import { isFfmpegAvailable } from './src/server/downloader.ts';
+import type { Project, SearchSettings } from './src/types/index.ts';
 import {
   verifyAccessCode,
   getRateLimitKey,
-  checkSharedLoginLimit,
-  recordSharedLoginFailure,
-  resetSharedLoginFailures,
+  checkLoginRateLimit,
+  recordFailedLoginAttempt,
+  resetLoginAttempts,
   issueAuthSession,
   verifyAuthSession,
   revokeAuthSession,
   extractAuthToken,
 } from './src/server/auth.ts';
+import {
+  JobWorker,
+  handleStreamSearch,
+  handleStreamDownload,
+  handlePrepareExportZip,
+  handleStreamExportZip,
+  handleDebugAmazon,
+} from './src/server/streamSearch.ts';
 
-dotenv.config({quiet:true});
+dotenv.config();
+assertProductionConfig();
+
+function isDataDirWritable(): boolean {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+    const probeFile = path.join(DATA_DIR, `.write_probe_${process.pid}`);
+    fs.writeFileSync(probeFile, 'ok');
+    fs.unlinkSync(probeFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function runStartupChecks(): { gemini: boolean; ffmpeg: boolean; dataDirWritable: boolean } {
+  assertProductionConfig();
+  const gemini = Boolean(GEMINI_API_KEY && GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
+  const ffmpeg = isFfmpegAvailable();
+  const dataDirWritable = isDataDirWritable();
+  console.log(`[Startup] Gemini API key: ${gemini ? 'present' : 'missing'}`);
+  console.log(`[Startup] ffmpeg binary: ${ffmpeg ? 'present' : 'missing'}`);
+  console.log(`[Startup] Data directory (${DATA_DIR}): ${dataDirWritable ? 'writable' : 'not writable'}`);
+  return { gemini, ffmpeg, dataDirWritable };
+}
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use('/api/auth', (_req,res,next) => {
-  res.setHeader('Cache-Control','private, no-store');
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    frameguard: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+
+// Global API rate limiter (protects all /api/* routes against abuse)
+const globalRateBuckets = new Map<string, { count: number; resetAt: number }>();
+const GLOBAL_RATE_WINDOW_MS = 60_000;
+const GLOBAL_RATE_MAX_REQUESTS = 300;
+
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  const key = getRateLimitKey(req);
+  const now = Date.now();
+  let bucket = globalRateBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    bucket = { count: 0, resetAt: now + GLOBAL_RATE_WINDOW_MS };
+    globalRateBuckets.set(key, bucket);
+  }
+  bucket.count++;
+  if (bucket.count > GLOBAL_RATE_MAX_REQUESTS) {
+    res.setHeader('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)));
+    return res.status(429).json({ error: 'تم تجاوز الحد الأقصى للطلبات. يرجى المحاولة بعد قليل.' });
+  }
   next();
 });
+
+const uploadJsonParser = express.json({ limit: '25mb' });
+app.use('/api/stream-search', uploadJsonParser);
+app.use('/api/projects', uploadJsonParser);
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Ephemeral short-lived tickets for SSE / media preview (bound to authenticated ownerId + projectId)
 const ephemeralTickets = new Map<string, { ownerId: string; projectId: string; expiresAt: number }>();
@@ -64,13 +134,38 @@ const worker = JobWorker.getInstance();
 const providerRegistry = ProviderRegistry.getInstance();
 
 // -------------------------------------------------------------
+// Public Health Endpoint
+// -------------------------------------------------------------
+app.get('/api/health', async (_req: Request, res: Response) => {
+  const gemini = isGeminiConfigured();
+  const ffmpeg = isFfmpegAvailable();
+  let amazonReachable = false;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const resp = await fetch('https://www.amazon.com/robots.txt', {
+      method: 'GET',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    amazonReachable = resp.status >= 200 && resp.status < 500;
+  } catch {
+    amazonReachable = false;
+  }
+  res.json({ gemini, ffmpeg, amazonReachable });
+});
+
+// -------------------------------------------------------------
 // Public Authentication Endpoints (Rate-limited, Server-Side Code Verification)
 // -------------------------------------------------------------
 
-app.post('/api/auth/login', async (req: Request, res: Response, next: NextFunction) => {
- try {
+app.post('/api/auth/login', (req: Request, res: Response) => {
   const rlKey = getRateLimitKey(req);
-  const rlCheck = await checkSharedLoginLimit(rlKey);
+  const rlCheck = checkLoginRateLimit(rlKey);
   if (!rlCheck.allowed) {
     res.setHeader('Retry-After', String(rlCheck.retryAfterSeconds || 60));
     return res.status(429).json({
@@ -82,27 +177,23 @@ app.post('/api/auth/login', async (req: Request, res: Response, next: NextFuncti
   const verification = verifyAccessCode(rawCode);
 
   if (!verification.valid || !verification.ownerId) {
-    await recordSharedLoginFailure(rlKey);
+    recordFailedLoginAttempt(rlKey);
     return res.status(401).json({
       error: 'كود الدخول غير صحيح',
     });
   }
 
-  await resetSharedLoginFailures(rlKey);
+  resetLoginAttempts(rlKey);
 
-  // Support optional bounded TTL header for automated expiration tests (capped at 12h)
-  const customTtlHeader = Number(req.headers['x-session-ttl-ms']);
-  const ttlMs =
-    Number.isFinite(customTtlHeader) && customTtlHeader > 50 && customTtlHeader <= 12 * 3600 * 1000
-      ? customTtlHeader
-      : 12 * 60 * 60 * 1000;
-
-  const { token, expiresAt } = await issueAuthSession(verification.ownerId, ttlMs);
+  const ttlMs = 12 * 60 * 60 * 1000;
+  const { token, expiresAt } = issueAuthSession(verification.ownerId, ttlMs);
   const maxAgeSec = Math.max(1, Math.floor((expiresAt - Date.now()) / 1000));
+  const isHttps = IS_PROD || req.secure || req.headers['x-forwarded-proto'] === 'https';
+  const sameSiteAndSecure = isHttps ? 'SameSite=None; Secure' : 'SameSite=Lax';
 
   res.setHeader(
     'Set-Cookie',
-    `cr_auth_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${process.env.VERCEL ? '; Secure' : ''}`
+    `cr_auth_token=${encodeURIComponent(token)}; Path=/; HttpOnly; ${sameSiteAndSecure}; Max-Age=${maxAgeSec}`
   );
 
   return res.json({
@@ -110,13 +201,11 @@ app.post('/api/auth/login', async (req: Request, res: Response, next: NextFuncti
     token,
     expiresAt,
   });
- } catch(error) { next(error); }
 });
 
-app.get('/api/auth/session', async (req: Request, res: Response, next: NextFunction) => {
- try {
+app.get('/api/auth/session', (req: Request, res: Response) => {
   const token = extractAuthToken(req);
-  const session = await verifyAuthSession(token);
+  const session = verifyAuthSession(token);
   if (!session.valid || !session.ownerId) {
     return res.status(401).json({
       authenticated: false,
@@ -127,31 +216,29 @@ app.get('/api/auth/session', async (req: Request, res: Response, next: NextFunct
     authenticated: true,
     expiresAt: session.expiresAt,
   });
- } catch(error) {next(error);}
 });
 
-app.post('/api/auth/logout', async (req: Request, res: Response, next: NextFunction) => {
- try {
+app.post('/api/auth/logout', (req: Request, res: Response) => {
   const token = extractAuthToken(req);
   if (token) {
-    await revokeAuthSession(token);
+    revokeAuthSession(token);
   }
+  const isHttps = IS_PROD || req.secure || req.headers['x-forwarded-proto'] === 'https';
+  const sameSiteAndSecure = isHttps ? 'SameSite=None; Secure' : 'SameSite=Lax';
   res.setHeader(
     'Set-Cookie',
-    `cr_auth_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.VERCEL ? '; Secure' : ''}`
+    `cr_auth_token=; Path=/; HttpOnly; ${sameSiteAndSecure}; Max-Age=0`
   );
   return res.json({ authenticated: false });
- } catch(error) {next(error);}
 });
 
 // -------------------------------------------------------------
 // Strict Authentication Guard for all /api/* routes
 // Never accepts arbitrary X-Session-ID or ?sessionId= query parameters
 // -------------------------------------------------------------
-async function requireAuth(req: Request, res: Response, next: NextFunction) {
- try {
+function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = extractAuthToken(req);
-  const session = await verifyAuthSession(token);
+  const session = verifyAuthSession(token);
   if (session.valid && session.ownerId) {
     (req as any).sessionId = session.ownerId;
     return next();
@@ -171,20 +258,7 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
   return res.status(401).json({
     error: 'يرجى تسجيل الدخول أولاً',
   });
- } catch(error) {next(error);}
 }
-
-app.get('/api/health', (_req, res) => res.json({ok:true, api:true, projectStorageReady:!process.env.VERCEL}));
-
-// Until a durable cloud project store and job runner are configured, refuse cloud
-// mutations instead of pretending scratch-space files are persistent projects.
-app.use('/api/projects', (req,res,next) => {
-  if (process.env.VERCEL && req.method !== 'GET') return requireAuth(req,res,() => res.status(503).json({
-    code:'CLOUD_PROJECT_STORAGE_REQUIRED',
-    error:'تم إصلاح تسجيل الدخول. حفظ المشاريع وتشغيل البحث على السحابة يحتاجان استكمال إعداد التخزين الدائم أولاً.',
-  }));
-  next();
-});
 
 // -------------------------------------------------------------
 // Protected REST API Routes
@@ -207,12 +281,76 @@ app.get('/api/library', requireAuth, (req: Request, res: Response) => {
   res.json({ assets: storage.getLibrary(sid) });
 });
 
+// -------------------------------------------------------------
+// Ephemeral Streaming Search & On-Demand Download (Zero Disk Persistence)
+// Works seamlessly in all environments including Vercel Serverless
+// -------------------------------------------------------------
+app.post('/api/stream-search', requireAuth, (req: Request, res: Response) => {
+  const sid = (req as any).sessionId;
+  handleStreamSearch(req, res, sid).catch((err) => {
+    console.error('[StreamSearch Error]', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal streaming search error' });
+    }
+  });
+});
+
+app.get('/api/stream-search/download', requireAuth, (req: Request, res: Response) => {
+  handleStreamDownload(req, res).catch((err) => {
+    console.error('[StreamDownload Error]', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal download error' });
+    }
+  });
+});
+
+app.post('/api/stream-search/prepare-zip', requireAuth, (req: Request, res: Response) => {
+  const sid = (req as any).sessionId;
+  handlePrepareExportZip(req, res, sid);
+});
+
+app.get('/api/stream-search/export-zip', requireAuth, (req: Request, res: Response) => {
+  const sid = (req as any).sessionId;
+  handleStreamExportZip(req, res, sid).catch((err) => {
+    console.error('[StreamExportZip Error]', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal ZIP export error' });
+    }
+  });
+});
+
+app.post('/api/stream-search/export-zip', requireAuth, (req: Request, res: Response) => {
+  const sid = (req as any).sessionId;
+  handleStreamExportZip(req, res, sid).catch((err) => {
+    console.error('[StreamExportZip Error]', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal ZIP export error' });
+    }
+  });
+});
+
+app.get('/api/debug/amazon', requireAuth, (req: Request, res: Response) => {
+  handleDebugAmazon(req, res).catch((err) => {
+    console.error('[DebugAmazon Error]', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: (err as Error)?.message || 'Debug Amazon failed' });
+    }
+  });
+});
+
 app.get('/api/projects', requireAuth, (req: Request, res: Response) => {
   const sid = (req as any).sessionId;
   res.json({ projects: storage.getProjects(sid) });
 });
 
 app.post('/api/projects', requireAuth, (req: Request, res: Response) => {
+  if (process.env.VERCEL) {
+    return res.status(503).json({
+      code: 'CLOUD_PROJECT_STORAGE_REQUIRED',
+      error: 'تم إصلاح تسجيل الدخول. حفظ المشاريع وتشغيل البحث على السحابة يحتاجان استكمال إعداد التخزين الدائم أولًا.',
+    });
+  }
+
   const {
     name,
     referenceImages,
@@ -290,7 +428,6 @@ app.post('/api/projects', requireAuth, (req: Request, res: Response) => {
     candidates: [],
   };
 
-  prepareSearchIdentity(newProject);
   storage.upsertProject(newProject);
   res.status(201).json(newProject);
 });
@@ -311,24 +448,17 @@ app.patch('/api/projects/:id', requireAuth, (req: Request, res: Response) => {
     return res.status(404).json({ error: 'المشروع غير موجود أو لا تملك صلاحية الوصول إليه' });
   }
 
-  if (worker.isRunning(project.id)) return res.status(409).json({error: 'أوقف البحث وانتظر انتهاءه قبل تعديل المنتج'});
-  prepareSearchIdentity(project);
+  if (req.body.productProfile) {
+    project.productProfile = req.body.productProfile;
+  }
   if (req.body.name) {
     project.name = req.body.name;
   }
-  if (Array.isArray(req.body.referenceImages)) project.referenceImages = req.body.referenceImages;
-  if (typeof req.body.productListingUrl === 'string') project.productListingUrl = req.body.productListingUrl;
-  if (typeof req.body.userNotes === 'string') project.userNotes = req.body.userNotes;
-  const previousFingerprint = project.searchInputFingerprint;
-  prepareSearchIdentity(project);
-  if (req.body.productProfile && previousFingerprint === project.searchInputFingerprint) project.productProfile = req.body.productProfile;
   if (req.body.settings) {
     project.settings = { ...project.settings, ...req.body.settings };
   }
   if (req.body.candidates) {
-    // Only update existing assets; a client cannot inject another project's results.
-    const changes = new Map((Array.isArray(req.body.candidates) ? req.body.candidates : []).map((c: any) => [c.id, c]));
-    project.candidates = project.candidates.map(c => changes.has(c.id) ? {...c, selectedForExport: Boolean((changes.get(c.id) as any).selectedForExport)} : c);
+    project.candidates = req.body.candidates;
   }
   if (req.body.targetVideoCount !== undefined) {
     project.targetVideoCount = Math.min(500, Math.max(1, Number(req.body.targetVideoCount) || 10));
@@ -357,8 +487,6 @@ app.post('/api/projects/:id/analyze', requireAuth, async (req: Request, res: Res
     return res.status(404).json({ error: 'المشروع غير موجود' });
   }
 
-  if (worker.isRunning(project.id)) return res.status(409).json({error: 'البحث قيد التشغيل'});
-  const fingerprint = prepareSearchIdentity(project);
   const refImg = project.referenceImages[0];
   if (!refImg?.base64Data) {
     return res.status(400).json({ error: 'No image uploaded' });
@@ -371,7 +499,6 @@ app.post('/api/projects/:id/analyze', requireAuth, async (req: Request, res: Res
       project.userNotes,
       project.productListingUrl
     );
-    if (productInputFingerprint(project) !== fingerprint || worker.isRunning(project.id)) return res.status(409).json({error: 'تغيّر المنتج أثناء التحليل؛ أعد المحاولة'});
     project.productProfile = profile;
     project.logs.push({
       timestamp: new Date().toISOString(),
@@ -387,13 +514,19 @@ app.post('/api/projects/:id/analyze', requireAuth, async (req: Request, res: Res
 });
 
 app.post('/api/projects/:id/search', requireAuth, async (req: Request, res: Response) => {
+  if (process.env.VERCEL) {
+    return res.status(503).json({
+      code: 'CLOUD_PROJECT_STORAGE_REQUIRED',
+      error: 'تم إصلاح تسجيل الدخول. حفظ المشاريع وتشغيل البحث على السحابة يحتاجان استكمال إعداد التخزين الدائم أولًا.',
+    });
+  }
+
   const sid = (req as any).sessionId;
   const project = storage.getProject(req.params.id, sid);
   if (!project) {
     return res.status(404).json({ error: 'المشروع غير موجود' });
   }
 
-  if (worker.isRunning(project.id)) return res.status(409).json({error: 'الطلب السابق لم ينته بعد؛ انتظر ثم أعد المحاولة'});
   if (req.body?.targetVideoCount !== undefined) {
     project.targetVideoCount = Math.min(500, Math.max(1, Number(req.body.targetVideoCount) || 10));
     storage.upsertProject(project);
@@ -504,7 +637,7 @@ app.post('/api/projects/:id/assets/:assetId/retry', requireAuth, async (req: Req
   res.json({ success: true, asset });
 });
 
-app.get('/api/projects/:id/assets/:assetId/download', requireAuth, (req: Request, res: Response) => {
+app.get('/api/projects/:id/assets/:assetId/download', requireAuth, async (req: Request, res: Response) => {
   const sid = (req as any).sessionId;
   const project = storage.getProject(req.params.id, sid);
   if (!project) return res.status(404).json({ error: 'المشروع غير موجود' });
@@ -512,7 +645,27 @@ app.get('/api/projects/:id/assets/:assetId/download', requireAuth, (req: Request
   const asset = project.candidates.find((a) => a.id === req.params.assetId);
   if (!asset) return res.status(404).json({ error: 'العنصر غير موجود' });
 
-  if (asset.downloadStatus === 'verified_available' && asset.localFilePath && fs.existsSync(asset.localFilePath)) {
+  // If file is not yet downloaded on disk but mediaUrl is available, download & verify on the fly!
+  if ((!asset.localFilePath || !fs.existsSync(asset.localFilePath)) && asset.mediaUrl) {
+    try {
+      const { downloadMedia } = await import('./src/server/downloader.ts');
+      const result = await downloadMedia(asset.mediaUrl, asset.id, asset.mediaType);
+      if (result.status === 'verified_available' && result.localFilePath) {
+        asset.downloadStatus = 'verified_available';
+        asset.localFilePath = result.localFilePath;
+        asset.sha256 = result.sha256 || asset.sha256;
+        asset.fileSizeBytes = result.fileSizeBytes || asset.fileSizeBytes;
+        if (result.durationSeconds) asset.durationSeconds = result.durationSeconds;
+        if (result.width && result.height) asset.dimensions = { width: result.width, height: result.height };
+        const verifiedCount = project.candidates.filter((c) => c.downloadStatus === 'verified_available').length;
+        project.counters.downloadedAssets = verifiedCount;
+        project.counters.verifiedAssets = verifiedCount;
+        storage.upsertProject(project);
+      }
+    } catch {}
+  }
+
+  if (asset.localFilePath && fs.existsSync(asset.localFilePath)) {
     const ext = path.extname(asset.localFilePath).slice(1).toLowerCase() || (asset.mediaType === 'video' ? 'mp4' : 'jpg');
     const mimeMap: Record<string, string> = {
       mp4: 'video/mp4',
@@ -560,12 +713,13 @@ app.all('/api/*', requireAuth, (_req: Request, res: Response) => {
 });
 
 async function startServer() {
+  runStartupChecks();
   const isProd = process.env.NODE_ENV === 'production';
 
   if (!isProd) {
     const { createServer } = await import('vite');
     const vite = await createServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -582,13 +736,15 @@ async function startServer() {
   });
 }
 
-app.use((error:unknown,_req:Request,res:Response,_next:NextFunction) => {
-  // Do not expose provider errors, tokens, or submitted access codes.
-  console.error('[API] Request failed', error instanceof Error ? error.name : 'UnknownError');
-  res.status(503).json({code:'SERVICE_UNAVAILABLE',error:'خدمة تسجيل الدخول أو التخزين غير متاحة مؤقتاً. حاول مرة أخرى.'});
-});
-
 export default app;
-if (!process.env.VERCEL) startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-});
+
+const isTestRunner =
+  process.env.NODE_ENV === 'test' ||
+  process.env.NODE_TEST_CONTEXT !== undefined ||
+  process.argv.some((arg) => arg === '--test' || arg.endsWith('.test.ts'));
+
+if (!process.env.VERCEL && !isTestRunner) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+  });
+}

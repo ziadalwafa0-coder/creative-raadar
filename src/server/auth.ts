@@ -2,37 +2,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Request } from 'express';
-import { DATA_DIR } from './runtimePaths.ts';
-import { cloudAuthRecords, updateCloudCounter } from './cloudAuthRecords.ts';
+import { DATA_DIR, CREATIVE_RADAAR_PEPPER, ACCESS_CODE_DIGESTS } from './config.ts';
 
 const SESSIONS_FILE = path.join(DATA_DIR, 'auth_sessions.json');
-
-const SERVER_PEPPER_SALT =
-  process.env.CREATIVE_RADAAR_PEPPER || 'creative_radaar_v1_hmac_salt_9f8e7d6c5b4a3210';
+const SERVER_PEPPER_SALT = CREATIVE_RADAAR_PEPPER;
 const PBKDF2_ITERATIONS = 15000;
-
-/**
- * Only PBKDF2-SHA256 digests of the 16 authorized access codes are stored here.
- * Plaintext codes are never stored in code, logs, client bundles, or responses.
- */
-const ALLOWED_CODE_DIGESTS: readonly string[] = [
-  '49df6742a19cfb94d2b217ed78283e8bc9829e7c8e435eeb7982dd8badb85805',
-  'bbe306ae6d1322716e124c1c2a5640d5246caa9cbc02f74e6f450ed3b6f6e8b8',
-  'bc0baad48f83aec2a74046276c928c5198008c91b38350b54f9c9d68239f00fa',
-  'd3a12bcfe2f7faa8be79cea700fd46375cfa2da812513264391c7f9241ce920f',
-  'cab24a5dc82354231865b1961832669046dbfaa72dc2643f6426eb75fcc318d6',
-  'b665b722afed8371d94c4008e6254141cf6030899628617429ac9e90ebb88c86',
-  'da1aa887ac4dfb42528182785af4b9f5f6b5663f2bc23969e220c33e67f19e9b',
-  'ea1fa0ba0472ed5034d7a7fae264b2f203ac6e503b2caf4d41db6d88798f33e5',
-  '2d2764995156f667ce84f42b03d2ef4ac688b0a2e194bd3b1bfd6688fd14d1ec',
-  'be81f1652528608e182a0ad7555548832836764ba2a3e923e49b8f6b8180e20e',
-  '01912c999c0bdc5fecb15825a3bd4fccffabd2a72dc53b20c6cba8131618e446',
-  '204654da50f797b4068f1a8b738b2fe06835fd406543be03becaab0755eb148f',
-  'dee9a0c01511257cbe97c1dc59de54bbf0265c15f4007bafe8deb433e51c33fc',
-  'e2451d28c3efdf159c13acb252623a85ddd57a55a2909891cbd6014b70657791',
-  '5f5842008f0ddc77946ad28c5a19e65d002ecfb839d3fd9ac70184a4cb4a50d2',
-  '3c1a0deb1cf91f309272882be66c4a006249eefdaacbc83ec0a31f31b5670223',
-];
+const ALLOWED_CODE_DIGESTS: readonly string[] = ACCESS_CODE_DIGESTS;
 
 /**
  * Deterministic owner ID for the primary user's normalized code (derived from digest index 1).
@@ -176,95 +151,111 @@ export function clearAllRateLimitsForTests(): void {
   rateLimitMap.clear();
 }
 
-export async function issueAuthSession(
+const revokedTokenHashes = new Set<string>();
+
+function createSignedToken(ownerId: string, expiresAt: number): string {
+  const nonce = crypto.randomBytes(12).toString('hex');
+  const payload = `${ownerId}.${expiresAt}.${nonce}`;
+  const payloadB64 = Buffer.from(payload, 'utf-8').toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SERVER_PEPPER_SALT)
+    .update(payloadB64)
+    .digest('base64url');
+  return `crs_${payloadB64}.${sig}`;
+}
+
+function verifySignedToken(rawToken: string): { valid: boolean; ownerId?: string; expiresAt?: number } {
+  if (!rawToken.startsWith('crs_') || !rawToken.includes('.')) {
+    return { valid: false };
+  }
+  const body = rawToken.slice(4);
+  const dotIdx = body.lastIndexOf('.');
+  if (dotIdx <= 0) return { valid: false };
+  const payloadB64 = body.slice(0, dotIdx);
+  const sig = body.slice(dotIdx + 1);
+  const expectedSig = crypto
+    .createHmac('sha256', SERVER_PEPPER_SALT)
+    .update(payloadB64)
+    .digest('base64url');
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return { valid: false };
+  }
+  try {
+    const decoded = Buffer.from(payloadB64, 'base64url').toString('utf-8');
+    const [ownerId, expStr] = decoded.split('.');
+    const expiresAt = Number(expStr);
+    if (!ownerId || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      return { valid: false };
+    }
+    return { valid: true, ownerId, expiresAt };
+  } catch {
+    return { valid: false };
+  }
+}
+
+export function issueAuthSession(
   ownerId: string,
   ttlMs: number = DEFAULT_SESSION_TTL_MS
-): Promise<{ token: string; expiresAt: number }> {
-  const rawToken = `crs_${crypto.randomBytes(28).toString('hex')}`;
-  const tokenHash = hashToken(rawToken);
+): { token: string; expiresAt: number } {
   const now = Date.now();
   const expiresAt = now + ttlMs;
+  const rawToken = createSignedToken(ownerId, expiresAt);
+  const tokenHash = hashToken(rawToken);
 
-  const record = {
+  sessionsByTokenHash.set(tokenHash, {
     tokenHash,
     ownerId,
     createdAt: now,
     expiresAt,
-  };
-  if (process.env.VERCEL) await cloudAuthRecords.write(`sessions/${tokenHash}`, record);
-  else {
-    sessionsByTokenHash.set(tokenHash, record);
-    saveSessionsToDisk();
-  }
+  });
+  saveSessionsToDisk();
 
   return { token: rawToken, expiresAt };
 }
 
-export async function verifyAuthSession(rawToken: string | undefined): Promise<{
+export function verifyAuthSession(rawToken: string | undefined): {
   valid: boolean;
   ownerId?: string;
   expiresAt?: number;
-}> {
+} {
   if (!rawToken || typeof rawToken !== 'string' || !rawToken.startsWith('crs_')) {
     return { valid: false };
   }
   const tokenHash = hashToken(rawToken);
-  const record = process.env.VERCEL
-    ? (await cloudAuthRecords.read<AuthSessionRecord>(`sessions/${tokenHash}`))?.value
-    : sessionsByTokenHash.get(tokenHash);
-  if (!record) {
+  if (revokedTokenHashes.has(tokenHash)) {
     return { valid: false };
   }
-  const now = Date.now();
-  if (record.expiresAt <= now) {
-    if (!process.env.VERCEL) {
+
+  const record = sessionsByTokenHash.get(tokenHash);
+  if (record) {
+    const now = Date.now();
+    if (record.expiresAt <= now) {
       sessionsByTokenHash.delete(tokenHash);
       saveSessionsToDisk();
+      return { valid: false };
     }
-    return { valid: false };
+    return {
+      valid: true,
+      ownerId: record.ownerId,
+      expiresAt: record.expiresAt,
+    };
   }
 
-  return {
-    valid: true,
-    ownerId: record.ownerId,
-    expiresAt: record.expiresAt,
-  };
+  // Fallback to stateless HMAC verification (for serverless instances / cold starts)
+  return verifySignedToken(rawToken);
 }
 
-export async function revokeAuthSession(rawToken: string | undefined): Promise<boolean> {
+export function revokeAuthSession(rawToken: string | undefined): boolean {
   if (!rawToken || typeof rawToken !== 'string') return false;
   const tokenHash = hashToken(rawToken);
-  if (process.env.VERCEL) {
-    await cloudAuthRecords.remove(`sessions/${tokenHash}`);
-    return true;
-  }
+  revokedTokenHashes.add(tokenHash);
   const existed = sessionsByTokenHash.delete(tokenHash);
   if (existed) {
     saveSessionsToDisk();
   }
-  return existed;
-}
-
-export async function checkSharedLoginLimit(key: string): Promise<{allowed:boolean;retryAfterSeconds?:number}> {
-  if (!process.env.VERCEL) return checkLoginRateLimit(key);
-  const record = await cloudAuthRecords.read<{count:number;resetAt:number}>(`limits/${hashToken(key)}`);
-  const value = record?.value;
-  if (value && value.resetAt > Date.now() && value.count >= MAX_FAILED_ATTEMPTS) {
-    return {allowed:false,retryAfterSeconds:Math.ceil((value.resetAt-Date.now())/1000)};
-  }
-  return {allowed:true};
-}
-
-export async function recordSharedLoginFailure(key:string):Promise<void> {
-  if (!process.env.VERCEL) { recordFailedLoginAttempt(key); return; }
-  await updateCloudCounter(`limits/${hashToken(key)}`, value => !value || value.resetAt <= Date.now()
-    ? {count:1,resetAt:Date.now()+RATE_LIMIT_WINDOW_MS}
-    : {...value,count:Math.min(value.count+1,MAX_FAILED_ATTEMPTS)});
-}
-
-export async function resetSharedLoginFailures(key:string):Promise<void> {
-  if (!process.env.VERCEL) {resetLoginAttempts(key); return;}
-  await cloudAuthRecords.remove(`limits/${hashToken(key)}`);
+  return existed || rawToken.includes('.');
 }
 
 export function extractAuthToken(req: Request): string | undefined {
@@ -290,6 +281,12 @@ export function extractAuthToken(req: Request): string | undefined {
     } catch {
       return match[1];
     }
+  }
+
+  // 4. Signed crs_ token in query parameter (for native <a href> / <video src> in cross-origin iframes)
+  const queryToken = req.query?.token;
+  if (typeof queryToken === 'string' && queryToken.trim().startsWith('crs_')) {
+    return queryToken.trim();
   }
 
   return undefined;

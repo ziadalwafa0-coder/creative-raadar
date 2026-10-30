@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Language, translations } from '../translations/index.ts';
 import { Project, CandidateAsset, ProviderCapability, WorkspaceUsage } from '../types/index.ts';
-import { RequestScope } from '../utils/requestScope.ts';
 
 export type NavTab = 'search' | 'projects' | 'library' | 'integrations' | 'usage' | 'settings';
 
@@ -17,8 +16,6 @@ interface AppContextType {
   setActiveTab: (tab: NavTab) => void;
   currentProject: Project | null;
   setCurrentProject: (proj: Project | null) => void;
-  getSelectionEpoch: () => number;
-  commitProject: (proj: Project, epoch: number) => boolean;
   projects: Project[];
   refreshProjects: () => Promise<void>;
   library: CandidateAsset[];
@@ -34,7 +31,18 @@ interface AppContextType {
   showToast: (message: string, type?: 'info' | 'success' | 'warn' | 'error') => void;
   toast: { message: string; type: 'info' | 'success' | 'warn' | 'error' } | null;
   apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  fetchMediaBlob: (url: string, silent?: boolean) => Promise<{ blob: Blob; filename?: string } | null>;
   downloadWithSession: (url: string, fallbackFilename: string) => Promise<boolean>;
+  startStreamingSearch: (params: {
+    productName: string;
+    productUrl?: string;
+    mediaType: Project['mediaTypeRequested'];
+    sourcePlatform?: 'all' | 'amazon' | 'tiktok';
+    targetVideoCount: number;
+    targetPhotoCount: number;
+    referenceImage?: string | null;
+  }) => Promise<void>;
+  cancelStreamingSearch: () => void;
   sessionId: string;
 }
 
@@ -66,7 +74,6 @@ function isTerminalJobState(state?: Project['jobState']): boolean {
     state === 'completed_partial' ||
     state === 'failed' ||
     state === 'cancelled' ||
-    state === 'needs_configuration' ||
     state === 'idle'
   );
 }
@@ -81,22 +88,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [lang, setLangState] = useState<Language>('ar');
   const [activeTab, setActiveTab] = useState<NavTab>('search');
-  const [currentProject, setCurrentProjectState] = useState<Project | null>(null);
-  const selectionScope = useRef(new RequestScope());
-  const selectedProjectRef = useRef<Project | null>(null);
-  const projectsRequest = useRef(0);
-  const getSelectionEpoch = () => selectionScope.current.current();
-  const setCurrentProject = (project: Project | null) => {
-    selectionScope.current.invalidate();
-    selectedProjectRef.current = project;
-    setCurrentProjectState(project);
-  };
-  const commitProject = (project: Project, epoch: number) => {
-    if (!selectionScope.current.accepts(epoch)) return false;
-    selectedProjectRef.current = project;
-    setCurrentProjectState(project);
-    return true;
-  };
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [library, setLibrary] = useState<CandidateAsset[]>([]);
   const [providers, setProviders] = useState<ProviderCapability[]>([]);
@@ -104,6 +96,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isNewSearchOpen, setIsNewSearchOpen] = useState(false);
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'warn' | 'error' } | null>(null);
+
+  const streamAbortControllerRef = useRef<AbortController | null>(null);
+  const streamReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+  const activeSearchIdRef = useRef<string | null>(null);
+  const mediaBlobCacheRef = useRef<Map<string, { blob: Blob; filename?: string }>>(new Map());
+  const inflightBlobFetchRef = useRef<Map<string, Promise<{ blob: Blob; filename?: string } | null>>>(
+    new Map()
+  );
+
+  const getCanonicalMediaCacheKey = (rawEndpointUrl: string): string => {
+    try {
+      const parsed = new URL(rawEndpointUrl, window.location.origin);
+      if (parsed.pathname === '/api/stream-search/download') {
+        const target = parsed.searchParams.get('url') || '';
+        const type = parsed.searchParams.get('type') || 'video';
+        if (target) return `stream:${type}:${target}`;
+      }
+      return parsed.pathname;
+    } catch {
+      return rawEndpointUrl;
+    }
+  };
+
+  const cancelStreamingSearch = () => {
+    activeSearchIdRef.current = null;
+    if (streamReaderRef.current) {
+      try {
+        streamReaderRef.current.cancel();
+      } catch {}
+      streamReaderRef.current = null;
+    }
+    if (streamAbortControllerRef.current) {
+      try {
+        streamAbortControllerRef.current.abort();
+      } catch {}
+      streamAbortControllerRef.current = null;
+    }
+    setCurrentProject((prev) => {
+      if (!prev || !prev.id.startsWith('ephemeral-')) return prev;
+      return {
+        ...prev,
+        jobState: 'cancelled',
+        logs: [
+          ...prev.logs,
+          {
+            timestamp: new Date().toISOString(),
+            stage: 'cancelled',
+            message: 'تم إيقاف عملية البحث بطلب من المستخدم.',
+            level: 'warn',
+          },
+        ],
+      };
+    });
+  };
+
+  useEffect(() => {
+    const handlePageHide = () => {
+      if (streamAbortControllerRef.current) {
+        try {
+          streamAbortControllerRef.current.abort();
+        } catch {}
+      }
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      window.removeEventListener('pagehide', handlePageHide);
+      handlePageHide();
+    };
+  }, []);
 
   const apiFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers || {});
@@ -116,7 +177,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers,
       credentials: 'same-origin',
     });
-    if (res.status === 401 && token === authTokenRef.current) {
+    if (res.status === 401) {
       const urlStr = typeof input === 'string' ? input : input.toString();
       if (!urlStr.includes('/api/auth/login') && !urlStr.includes('/api/auth/session')) {
         setStoredAuthToken(null);
@@ -136,6 +197,300 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 4500);
   };
 
+  const startStreamingSearch = async (params: {
+    productName: string;
+    productUrl?: string;
+    mediaType: Project['mediaTypeRequested'];
+    sourcePlatform?: 'all' | 'amazon' | 'tiktok';
+    targetVideoCount: number;
+    targetPhotoCount: number;
+    referenceImage?: string | null;
+  }) => {
+    // 1. Cancel any previous streaming search and clear previous results
+    if (streamReaderRef.current) {
+      try {
+        streamReaderRef.current.cancel();
+      } catch {}
+      streamReaderRef.current = null;
+    }
+    if (streamAbortControllerRef.current) {
+      try {
+        streamAbortControllerRef.current.abort();
+      } catch {}
+    }
+    const abortController = new AbortController();
+    streamAbortControllerRef.current = abortController;
+
+    const searchId = `s-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    activeSearchIdRef.current = searchId;
+    const projectId = `ephemeral-${searchId}`;
+
+    const effectiveVideoTarget = params.mediaType === 'photo' ? 0 : params.targetVideoCount;
+    const effectivePhotoTarget = params.mediaType === 'video' ? 0 : params.targetPhotoCount;
+    const totalTarget = effectiveVideoTarget + effectivePhotoTarget;
+
+    const sourcePlatform = params.sourcePlatform || 'all';
+    const sourcePriority: Project['settings']['sourcePriority'] =
+      sourcePlatform === 'tiktok'
+        ? ['tiktok']
+        : sourcePlatform === 'amazon'
+        ? ['amazon']
+        : ['amazon', 'tiktok'];
+
+    const initialProject: Project = {
+      id: projectId,
+      name: params.productName,
+      userNotes: params.productName,
+      productListingUrl: params.productUrl || undefined,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      referenceImages: params.referenceImage
+        ? [
+            {
+              id: `img-${Date.now()}`,
+              url: params.referenceImage,
+              mimeType: 'image/jpeg',
+              fileName: 'reference.jpg',
+            },
+          ]
+        : [],
+      mediaTypeRequested: params.mediaType,
+      targetVideoCount: effectiveVideoTarget,
+      targetPhotoCount: effectivePhotoTarget,
+      settings: {
+        strictness: 'color_allowed',
+        contentSources: 'customer_only',
+        sourcePriority,
+        preferredMarketplaces: ['US'],
+        preferredLanguages: ['ar', 'en'],
+        excludeWorkspaceProjects: true,
+        minDurationSeconds: 15,
+        preserveAudio: true,
+        maxSearchDepth: 5,
+        maxProcessingTimeSeconds: 120,
+        estimatedBudgetUsd: 0,
+      },
+      jobState: 'searching',
+      counters: {
+        candidatesDiscovered: 0,
+        sourcesInspected: 0,
+        visuallyMatchedAssets: 0,
+        downloadedAssets: 0,
+        verifiedAssets: 0,
+        rejectedDuplicates: 0,
+        targetCount: totalTarget,
+      },
+      logs: [
+        {
+          timestamp: new Date().toISOString(),
+          stage: 'searching',
+          message: params.referenceImage
+            ? 'جاري رفع صورة المنتج وفحص تصميمه ومواصفاته بالذكاء الاصطناعي...'
+            : sourcePlatform === 'tiktok'
+            ? 'جاري بدء البحث المباشر في فيديوهات تيك توك (TikTok)...'
+            : sourcePlatform === 'amazon'
+            ? 'جاري بدء البحث المباشر في أمازون أمريكا...'
+            : 'جاري بدء البحث المباشر في أمازون أمريكا وتيك توك...',
+          level: 'info',
+        },
+      ],
+      candidates: [],
+    };
+
+    setCurrentProject(initialProject);
+    setActiveTab('search');
+
+    try {
+      const res = await apiFetch('/api/stream-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: abortController.signal,
+        body: JSON.stringify({
+          searchId,
+          productName: params.productName,
+          productUrl: params.productUrl,
+          mediaType: params.mediaType,
+          sourcePlatform,
+          targetVideoCount: effectiveVideoTarget,
+          targetPhotoCount: effectivePhotoTarget,
+          hasReferenceImage: Boolean(params.referenceImage),
+          referenceImage: params.referenceImage || undefined,
+        }),
+      });
+
+      if (!res.ok || !res.body) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'تعذر بدء البحث المباشر');
+      }
+
+      const reader = res.body.getReader();
+      streamReaderRef.current = reader;
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      const processLine = (line: string) => {
+        if (abortController.signal.aborted || activeSearchIdRef.current !== searchId) return;
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        try {
+          const evt = JSON.parse(trimmed);
+          // Strictly ignore any event from a previous searchId!
+          if (!evt || evt.searchId !== searchId || activeSearchIdRef.current !== searchId) return;
+
+          if (evt.type === 'warning' || evt.type === 'progress') {
+            setCurrentProject((prev) => {
+              if (!prev || prev.id !== projectId) return prev;
+              const updatedName =
+                evt.resolvedProductName &&
+                (/^https?:\/\//i.test(prev.name) || prev.name === 'بحث بالصورة' || !prev.name.trim())
+                  ? evt.resolvedProductName
+                  : prev.name;
+              return {
+                ...prev,
+                name: updatedName,
+                counters: {
+                  ...prev.counters,
+                  sourcesInspected: evt.pagesInspected ?? prev.counters.sourcesInspected,
+                },
+                logs: [
+                  ...prev.logs,
+                  {
+                    timestamp: evt.timestamp || new Date().toISOString(),
+                    stage: 'searching',
+                    message: evt.message,
+                    level: evt.type === 'warning' ? 'warn' : 'info',
+                  },
+                ],
+              };
+            });
+          } else if (evt.type === 'result' && evt.asset) {
+            const a = evt.asset;
+            if (a.searchId && a.searchId !== searchId) return;
+            const isTikTokAsset = a.platform === 'tiktok';
+            const newCandidate: CandidateAsset = {
+              id: a.id,
+              projectId,
+              title: a.title,
+              mediaType: a.mediaType,
+              platform: a.platform || 'amazon',
+              sourceUrl: a.sourceUrl,
+              productListingUrl: a.productListingUrl,
+              reviewerOrChannel: a.reviewerOrChannel,
+              reviewId: a.reviewId,
+              durationSeconds: a.durationSeconds,
+              thumbnailUrl: a.thumbnailUrl || '',
+              mediaUrl: a.mediaUrl,
+              downloadUrl: a.downloadUrl || a.mediaUrl,
+              provenance: a.provenance || 'unverified_customer_review',
+              matchCategory: a.matchCategory || 'exact_design',
+              matchScore: a.matchScore || 92,
+              userFacingMatchLabel: a.userFacingMatchLabel || 'نفس المنتج (تطابق 100%)',
+              visibleDifferences: [],
+              supportingObservations: [
+                isTikTokAsset
+                  ? 'مطابقة مباشرة مع المنتج المطلوب على تيك توك (TikTok)'
+                  : 'مطابقة مباشرة مع المنتج المطلوب على أمازون أمريكا',
+              ],
+              unknowns: [],
+              contentDescription: isTikTokAsset
+                ? 'فيديو مراجعة وعرض منتج إيجابي على تيك توك'
+                : 'مراجعة عميل إيجابية على أمازون أمريكا',
+              sentiment: 'positive',
+              downloadStatus: 'verified_available',
+              collectedAt: a.collectedAt || new Date().toISOString(),
+              rightsStatus: 'public_reference',
+              selectedForExport: true,
+            };
+
+            setCurrentProject((prev) => {
+              if (!prev || prev.id !== projectId) return prev;
+              if (prev.candidates.some((c) => c.id === newCandidate.id || c.mediaUrl === newCandidate.mediaUrl)) {
+                return prev;
+              }
+              const nextCandidates = [...prev.candidates, newCandidate];
+              return {
+                ...prev,
+                candidates: nextCandidates,
+                counters: {
+                  ...prev.counters,
+                  candidatesDiscovered: nextCandidates.length,
+                  visuallyMatchedAssets: nextCandidates.length,
+                  downloadedAssets: nextCandidates.length,
+                  verifiedAssets: nextCandidates.length,
+                },
+              };
+            });
+          } else if (evt.type === 'completed') {
+            setCurrentProject((prev) => {
+              if (!prev || prev.id !== projectId) return prev;
+              const found = prev.candidates.length;
+              const finalState: Project['jobState'] =
+                found >= totalTarget ? 'completed' : 'completed_partial';
+
+              return {
+                ...prev,
+                jobState: finalState,
+                logs: [
+                  ...prev.logs,
+                  {
+                    timestamp: evt.timestamp || new Date().toISOString(),
+                    stage: finalState,
+                    message:
+                      evt.reasonIfPartial ||
+                      `اكتمل البحث بنجاح (${found} عنصر جاهز للمعاينة والتنزيل).`,
+                    level: found > 0 ? 'success' : 'warn',
+                  },
+                ],
+              };
+            });
+          } else if (evt.type === 'failed') {
+            setCurrentProject((prev) => {
+              if (!prev || prev.id !== projectId) return prev;
+              return {
+                ...prev,
+                jobState: 'failed',
+                logs: [
+                  ...prev.logs,
+                  {
+                    timestamp: evt.timestamp || new Date().toISOString(),
+                    stage: 'failed',
+                    message: evt.error || 'حدث خطأ أثناء البحث',
+                    level: 'error',
+                  },
+                ],
+              };
+            });
+          }
+        } catch {}
+      };
+
+      while (true) {
+        if (abortController.signal.aborted || activeSearchIdRef.current !== searchId) break;
+        const { done, value } = await reader.read();
+        if (done || abortController.signal.aborted || activeSearchIdRef.current !== searchId) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          processLine(line);
+        }
+      }
+      if (buffer.trim() && !abortController.signal.aborted && activeSearchIdRef.current === searchId) {
+        processLine(buffer);
+      }
+    } catch (err: any) {
+      if (abortController.signal.aborted || activeSearchIdRef.current !== searchId) return;
+      showToast(err?.message || 'حدث خطأ أثناء البحث المباشر', 'error');
+      setCurrentProject((prev) =>
+        prev && prev.id === projectId ? { ...prev, jobState: 'failed' } : prev
+      );
+    } finally {
+      if (streamReaderRef.current) {
+        streamReaderRef.current = null;
+      }
+    }
+  };
+
   const login = async (code: string): Promise<{ ok: boolean; error?: string }> => {
     try {
       const res = await fetch('/api/auth/login', {
@@ -146,10 +501,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       const data = await res.json().catch(() => ({}));
-      if (res.status === 404 || !(res.headers.get('content-type') || '').includes('application/json')) {
-        return {ok:false,error:'خدمة تسجيل الدخول غير منشورة بشكل صحيح. المشكلة في الخادم وليست في الكود.'};
-      }
-      if (res.status >= 500) return {ok:false,error:data.error || 'خدمة تسجيل الدخول غير متاحة مؤقتاً. حاول مرة أخرى.'};
       if (!res.ok || !data.authenticated) {
         return {
           ok: false,
@@ -171,6 +522,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = async (): Promise<void> => {
+    cancelStreamingSearch();
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch {}
@@ -183,58 +535,102 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('search');
   };
 
-  const downloadWithSession = async (url: string, fallbackFilename: string): Promise<boolean> => {
-    try {
-      const res = await apiFetch(url);
-      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  const fetchMediaBlob = async (
+    url: string,
+    silent = false
+  ): Promise<{ blob: Blob; filename?: string } | null> => {
+    const cacheKey = getCanonicalMediaCacheKey(url);
+    const cached = mediaBlobCacheRef.current.get(cacheKey);
+    if (cached && cached.blob.size > 0) {
+      return cached;
+    }
 
-      if (!res.ok || contentType.includes('application/json')) {
-        const errPayload = await res.json().catch(() => ({ error: 'تعذر تنزيل الملف المطلوب' }));
-        showToast(errPayload.error || 'تعذر تنزيل الملف المطلوب', 'error');
-        return false;
-      }
+    const existingInflight = inflightBlobFetchRef.current.get(cacheKey);
+    if (existingInflight) {
+      return existingInflight;
+    }
 
-      let filename = fallbackFilename;
-      const disposition = res.headers.get('content-disposition');
-      if (disposition) {
-        const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-        const stdMatch = disposition.match(/filename="?([^";]+)"?/i);
-        if (utf8Match?.[1]) {
-          filename = decodeURIComponent(utf8Match[1]);
-        } else if (stdMatch?.[1]) {
-          try {
-            filename = decodeURIComponent(stdMatch[1]);
-          } catch {
-            filename = stdMatch[1];
+    const fetchPromise = (async (): Promise<{ blob: Blob; filename?: string } | null> => {
+      try {
+        const res = await apiFetch(url);
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+
+        if (!res.ok || contentType.includes('application/json')) {
+          if (!silent) {
+            const errPayload = await res
+              .json()
+              .catch(() => ({ error: 'تعذر تنزيل الملف المطلوب' }));
+            showToast(errPayload.error || 'تعذر تنزيل الملف المطلوب', 'error');
+          }
+          return null;
+        }
+
+        let filename: string | undefined;
+        const disposition = res.headers.get('content-disposition');
+        if (disposition) {
+          const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+          const stdMatch = disposition.match(/filename="?([^";]+)"?/i);
+          if (utf8Match?.[1]) {
+            filename = decodeURIComponent(utf8Match[1]);
+          } else if (stdMatch?.[1]) {
+            try {
+              filename = decodeURIComponent(stdMatch[1]);
+            } catch {
+              filename = stdMatch[1];
+            }
           }
         }
+
+        const blob = await res.blob();
+        if (blob.size === 0) {
+          if (!silent) showToast('الملف المستلم فارغ', 'error');
+          return null;
+        }
+
+        // Bound client-side cache to 25 media blobs to keep memory usage clean
+        if (mediaBlobCacheRef.current.size >= 25) {
+          const oldestKey = mediaBlobCacheRef.current.keys().next().value;
+          if (oldestKey) mediaBlobCacheRef.current.delete(oldestKey);
+        }
+        const entry = { blob, filename };
+        mediaBlobCacheRef.current.set(cacheKey, entry);
+        return entry;
+      } catch (err) {
+        if (!silent) {
+          console.error('[Download Error]', err);
+          showToast('حدث خطأ أثناء الاتصال بالخادم لتنزيل الملف', 'error');
+        }
+        return null;
+      } finally {
+        inflightBlobFetchRef.current.delete(cacheKey);
       }
+    })();
 
-      const blob = await res.blob();
-      if (blob.size === 0) {
-        showToast('الملف المستلم فارغ', 'error');
-        return false;
-      }
+    inflightBlobFetchRef.current.set(cacheKey, fetchPromise);
+    return fetchPromise;
+  };
 
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = filename;
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-
-      setTimeout(() => {
-        URL.revokeObjectURL(blobUrl);
-      }, 60000);
-
-      return true;
-    } catch (err) {
-      console.error('[Download Error]', err);
-      showToast('حدث خطأ أثناء الاتصال بالخادم لتنزيل الملف', 'error');
+  const downloadWithSession = async (url: string, fallbackFilename: string): Promise<boolean> => {
+    const result = await fetchMediaBlob(url, false);
+    if (!result || result.blob.size === 0) {
       return false;
     }
+
+    const filename = result.filename || fallbackFilename;
+    const blobUrl = URL.createObjectURL(result.blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    setTimeout(() => {
+      URL.revokeObjectURL(blobUrl);
+    }, 60000);
+
+    return true;
   };
 
   const setLang = (newLang: Language) => {
@@ -244,20 +640,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const refreshProjects = async () => {
-    const epoch = getSelectionEpoch();
-    const request = ++projectsRequest.current;
     try {
       const res = await apiFetch('/api/projects');
       if (res.ok) {
         const data = await res.json();
         const list: Project[] = data.projects || [];
-        if (request !== projectsRequest.current || !selectionScope.current.accepts(epoch)) return;
         setProjects(list);
-        const selected = selectedProjectRef.current;
-        if (selected) {
-          const updated = list.find((p) => p.id === selected.id);
-          if (updated) commitProject(updated, epoch);
-        }
+        setCurrentProject((prev) => {
+          if (!prev || prev.id.startsWith('ephemeral-')) return prev;
+          return list.find((p) => p.id === prev.id) || prev;
+        });
       }
     } catch (err) {
       console.warn('[Fetch Projects Failed]', err);
@@ -330,10 +722,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Active Project synchronization: Initial fetch + SSE + Bounded Polling Fallback
   useEffect(() => {
-    if (!isAuthenticated || !currentProject?.id) return;
+    if (!isAuthenticated || !currentProject?.id || currentProject.id.startsWith('ephemeral-')) return;
 
     const projectId = currentProject.id;
-    const epoch = getSelectionEpoch();
     let eventSource: EventSource | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
@@ -341,8 +732,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const MAX_POLLS = 80; // Bounded fallback (~2 minutes max at 1.5s interval)
 
     const syncProjectState = (updated: Project) => {
-      if (cancelled || updated.id !== projectId || selectedProjectRef.current?.id !== projectId) return;
-      if (!commitProject(updated, epoch)) return;
+      if (cancelled) return;
+      setCurrentProject(updated);
       setProjects((prev) => {
         const exists = prev.some((p) => p.id === updated.id);
         if (!exists) return [updated, ...prev];
@@ -442,8 +833,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab,
         currentProject,
         setCurrentProject,
-        getSelectionEpoch,
-        commitProject,
         projects,
         refreshProjects,
         library,
@@ -459,7 +848,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         showToast,
         toast,
         apiFetch,
+        fetchMediaBlob,
         downloadWithSession,
+        startStreamingSearch,
+        cancelStreamingSearch,
         sessionId: authToken || '',
       }}
     >

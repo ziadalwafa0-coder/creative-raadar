@@ -82,7 +82,6 @@ export interface SearchSettings {
 }
 
 export interface CandidateAsset {
-  searchInputFingerprint?: string;
   id: string;
   projectId: string;
   title: string;
@@ -95,6 +94,7 @@ export interface CandidateAsset {
   reviewId?: string;
   thumbnailUrl: string;
   mediaUrl?: string;
+  downloadUrl?: string;
   provenance: ProvenanceClassification;
   verifiedPurchaseEvidence?: string;
   incentiveDisclosure?: string;
@@ -130,8 +130,6 @@ export interface JobProgressCounters {
 }
 
 export interface Project {
-  searchInputFingerprint?: string;
-  previousSearches?: {fingerprint?: string; archivedAt: string; productProfile?: VisualAttribute; candidates: CandidateAsset[]}[];
   id: string;
   sessionId?: string;
   name: string;

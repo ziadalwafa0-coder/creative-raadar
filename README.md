@@ -4,16 +4,6 @@
 
 # Run and deploy your AI Studio app
 
-## Customer review streaming backend
-
-The new public-page-only Fastify backend and Arabic React UI are documented in [backend/README.ar.md](backend/README.ar.md). Set `VITE_REVIEWS_API_URL` to activate the new frontend. Backend source, deployment files and cache schema are under `backend/`; no production backend URL has been configured yet.
-
-## Product isolation fix — 2026-10-24
-
-See [the Arabic diagnosis, simulation and upgrade notes](FIX_REPORT_AR.md).
-Run `npm ci`, `npm run lint`, `npm run build`, `npm run test:isolation`, and `npm run test:isolation:api`.
-Do not replace an existing `.data` directory when upgrading. No user data is included in this source package.
-
 This contains everything you need to run your app locally.
 
 View your app in AI Studio: https://ai.studio/apps/ff65a0a5-87b8-4e89-8a97-bf11506d19d8

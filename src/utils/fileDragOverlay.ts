@@ -1,57 +1,100 @@
-// Capture terminal events: upload widgets may stop drop propagation themselves.
-export function bindFileDragOverlay(target: Window, onChange: (active: boolean) => void) {
-  const capture = {capture:true};
-  let depth = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const reset = () => {
-    depth = 0;
-    clearTimeout(timer);
-    onChange(false);
+/**
+ * Utility to manage file drag-and-drop overlays reliably.
+ * Solves the issue where inner drop zones stop event propagation (stopPropagation),
+ * which would otherwise leave the window drag overlay stuck open.
+ * Attaches to window in the CAPTURE phase, and resets on Escape, dragend, or blur.
+ */
+
+export interface DragOverlayOptions {
+  onDragStateChange: (isDragging: boolean) => void;
+  onFileDrop: (file: File) => void;
+  acceptMimePrefix?: string;
+  onError?: (message: string) => void;
+}
+
+export function setupWindowDragDropListeners(options: DragOverlayOptions): () => void {
+  const {
+    onDragStateChange,
+    onFileDrop,
+    acceptMimePrefix = 'image/',
+    onError,
+  } = options;
+
+  let dragCounter = 0;
+
+  const resetOverlay = () => {
+    dragCounter = 0;
+    onDragStateChange(false);
   };
-  const renew = () => {
-    clearTimeout(timer);
-    // Some external drag sources never deliver dragleave/dragend on cancellation.
-    timer = setTimeout(reset, 1500);
+
+  const handleDragEnter = (e: DragEvent) => {
+    e.preventDefault();
+    dragCounter += 1;
+    if (e.dataTransfer?.types?.includes('Files')) {
+      onDragStateChange(true);
+    }
   };
-  const enter = (event: DragEvent) => {
-    if (!event.dataTransfer?.types.includes('Files')) return;
-    event.preventDefault();
-    depth += 1;
-    onChange(true);
-    renew();
+
+  const handleDragOver = (e: DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
   };
-  const over = (event: DragEvent) => {
-    if (!event.dataTransfer?.types.includes('Files')) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
-    onChange(true);
-    renew();
+
+  const handleDragLeave = (e: DragEvent) => {
+    e.preventDefault();
+    dragCounter -= 1;
+    if (dragCounter <= 0) {
+      resetOverlay();
+    }
   };
-  const leave = (event: DragEvent) => {
-    depth = Math.max(0, depth - 1);
-    if (!event.relatedTarget || depth === 0) reset();
+
+  const handleDrop = (e: DragEvent) => {
+    // CAPTURE phase handler ensures overlay is ALWAYS cleared even if child elements stop propagation
+    e.preventDefault();
+    resetOverlay();
+
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      if (acceptMimePrefix && !file.type.startsWith(acceptMimePrefix)) {
+        if (onError) onError('يرجى اختيار ملف صالح');
+        return;
+      }
+      onFileDrop(file);
+    }
   };
-  const key = (event: KeyboardEvent) => { if (event.key === 'Escape') reset(); };
-  const visibility = () => { if (target.document.hidden) reset(); };
-  target.addEventListener('dragenter', enter, capture);
-  target.addEventListener('dragover', over, capture);
-  target.addEventListener('dragleave', leave, capture);
-  target.addEventListener('drop', reset, capture);
-  target.addEventListener('dragend', reset, capture);
-  target.addEventListener('keydown', key, capture);
-  target.addEventListener('blur', reset);
-  target.addEventListener('pointerdown', reset, capture);
-  target.document.addEventListener('visibilitychange', visibility);
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      resetOverlay();
+    }
+  };
+
+  const handleDragEnd = () => {
+    resetOverlay();
+  };
+
+  const handleBlur = () => {
+    resetOverlay();
+  };
+
+  // Add listeners with capture: true for drop and dragleave to prevent inner element stopPropagation leaks
+  window.addEventListener('dragenter', handleDragEnter);
+  window.addEventListener('dragover', handleDragOver);
+  window.addEventListener('dragleave', handleDragLeave, { capture: true });
+  window.addEventListener('drop', handleDrop, { capture: true });
+  window.addEventListener('dragend', handleDragEnd);
+  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('blur', handleBlur);
+
   return () => {
-    clearTimeout(timer);
-    target.removeEventListener('dragenter', enter, capture);
-    target.removeEventListener('dragover', over, capture);
-    target.removeEventListener('dragleave', leave, capture);
-    target.removeEventListener('drop', reset, capture);
-    target.removeEventListener('dragend', reset, capture);
-    target.removeEventListener('keydown', key, capture);
-    target.removeEventListener('blur', reset);
-    target.removeEventListener('pointerdown', reset, capture);
-    target.document.removeEventListener('visibilitychange', visibility);
+    window.removeEventListener('dragenter', handleDragEnter);
+    window.removeEventListener('dragover', handleDragOver);
+    window.removeEventListener('dragleave', handleDragLeave, { capture: true });
+    window.removeEventListener('drop', handleDrop, { capture: true });
+    window.removeEventListener('dragend', handleDragEnd);
+    window.removeEventListener('keydown', handleKeyDown);
+    window.removeEventListener('blur', handleBlur);
   };
 }
