@@ -22,7 +22,7 @@ test('review pagination streams first results, follows same-product next pages a
 test('repeated pagination pages cannot inflate counts or create a loop',async()=>{
   let requests=0; let limited=false;
   const videos=await fetchAmazonUsProductVideos(asin,undefined,{limit:10,onLimited:()=>{limited=true;},fetchHtml:async()=>{requests++; return review(1)+next(2);}});
-  assert.equal(videos.length,1); assert.equal(requests,3); assert.equal(limited,true);
+  assert.equal(videos.length,1); assert.equal(requests,5); assert.equal(limited,true);
   assert.equal(nextAmazonReviewPage(`<li class="a-last"><a href="https://evil.test/product-reviews/${asin}?pageNumber=2">Next</a></li>`,'https://www.amazon.com',asin),null);
   assert.equal(nextAmazonReviewPage(next(2),'https://www.amazon.com','B099999999'),null);
   assert.equal(nextAmazonReviewPage(next(2).replace('a-last','a-last a-disabled'),'https://www.amazon.com',asin),null);
@@ -36,6 +36,17 @@ test('reviews already emitted by another listing do not consume the remaining re
   const seen=new Set(['stream000001']);
   const videos=await fetchAmazonUsProductVideos(asin,undefined,{limit:2,excludeStreamUuids:seen,onVideo:video=>seen.add(video.streamUuid),fetchHtml:async url=>url.includes('product-reviews') ? review(3) : review(1)+review(2)});
   assert.deepEqual(videos.map(video=>video.streamUuid).sort(),['stream000002','stream000003']);
+});
+
+test('rotating same-ASIN carousel subsets are accumulated instead of replacing older videos',async()=>{
+  let views=0;
+  const videos=await fetchAmazonUsProductVideos(asin,undefined,{limit:10,fetchHtml:async url=>{
+    if(url.includes('product-reviews')) return '';
+    views++;
+    return Array.from({length:4},(_,index)=>review((views-1)*3+index+1)).join('');
+  }});
+  assert.equal(videos.length,10); assert.equal(new Set(videos.map(video=>video.reviewId)).size,10);
+  assert.equal(views,3);
 });
 
 test('extra listings require image evidence and a server visual approval; client approvals are ignored',async()=>{

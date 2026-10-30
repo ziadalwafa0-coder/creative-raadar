@@ -353,9 +353,9 @@ export async function fetchAmazonUsProductVideos(
   const limit = Math.min(500, Math.max(1, options.limit || 50));
   signal?.throwIfAborted();
   const fetchHtml = options.fetchHtml || fetchAmazonHtml;
+  const cached = isAsinValid && !options.fetchHtml ? asinVideoCache.get(asin) : undefined;
 
   if (isAsinValid) {
-    const cached = asinVideoCache.get(asin);
     const available=cached?.videos.filter(video=>!options.excludeStreamUuids?.has(video.streamUuid)) || [];
     if (!options.fetchHtml && cached && cached.expiresAt > now && (available.length >= limit || cached.exhausted)) {
       const videos = available.slice(0,limit);
@@ -391,6 +391,7 @@ export async function fetchAmazonUsProductVideos(
   const fromReviews = reviewsHtml && reviewsMediaUrl ? parseAmazonUsVideosFromHtml(reviewsHtml, dpUrl) : [];
 
   const mergedByUuid = new Map<string, ExtractedAmazonVideo>();
+  if (cached && cached.expiresAt > now) for (const video of cached.videos) mergedByUuid.set(video.streamUuid,video);
   for (const v of [...fromReviews, ...fromDp]) {
     if (!mergedByUuid.has(v.streamUuid)) mergedByUuid.set(v.streamUuid, v);
   }
@@ -429,6 +430,21 @@ export async function fetchAmazonUsProductVideos(
       await deliver(); exhausted=!nextAmazonReviewPage(html,dpUrl,asin);
     } catch (error) { signal?.throwIfAborted(); options.onLimited?.(error instanceof Error ? error.message : 'تعذر فتح صفحة الريفيوهات التالية'); break; }
   }
+  // Amazon's public product carousel can return a different subset on each view.
+  // Merge a bounded number of ordinary successful page reads; never retry a block.
+  let unchangedViews=0;
+  for (let view=0; dpHtml && delivered.size<limit && !options.shouldStop?.() && view<3;view++) {
+    signal?.throwIfAborted();
+    exhausted=false;
+    try {
+      const snapshot=await fetchHtml(dpUrl,{signal,timeoutMs:8000,minHtmlChars:4000,referer:dpUrl});
+      const before=mergedByUuid.size;
+      for(const video of parseAmazonUsVideosFromHtml(snapshot,dpUrl)) if(!mergedByUuid.has(video.streamUuid)) mergedByUuid.set(video.streamUuid,video);
+      unchangedViews=before===mergedByUuid.size ? unchangedViews+1 : 0;
+      await deliver();
+      if(unchangedViews>=2) break;
+    } catch(error) { signal?.throwIfAborted(); options.onLimited?.('تعذر قراءة المزيد من فيديوهات صفحة المنتج'); break; }
+  }
   const merged = Array.from(mergedByUuid.values());
 
   if (isAsinValid && !signal?.aborted && !options.fetchHtml) {
@@ -437,7 +453,7 @@ export async function fetchAmazonUsProductVideos(
       videos: merged,
       isNegative: merged.length === 0,
       cachedAt: now,
-      expiresAt: now + (exhausted ? ASIN_CACHE_TTL_MS : 60_000),
+      expiresAt: now + ASIN_CACHE_TTL_MS,
       exhausted,
     });
     saveAsinCacheToDisk();
