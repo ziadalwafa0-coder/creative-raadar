@@ -22,8 +22,8 @@ async function readSearch(query:string,page:number,jobId:string,signal:AbortSign
     ratingCount:parseRatingsCount(row.querySelector('a')?.getAttribute('aria-label')||'')
   })).slice(0,100);
 }
-async function findCandidates(body:any,jobId:string,signal:AbortSignal,fetcher:Fetcher){
-  const seen=new Set<string>();
+async function findCandidates(body:any,jobId:string,signal:AbortSignal,fetcher:Fetcher,excluded:ReadonlySet<string>=new Set()){
+  const seen=new Set<string>(excluded);
   const alt=body.profile?.commercialNameEn;
   const plan=alt&&alt!==body.query?[[body.query,1],[alt,1],[body.query,2]]:[[body.query,1],[body.query,2],[body.query,3]];
   let last:Response|undefined;
@@ -44,10 +44,40 @@ async function collect(body:any,jobId:string,signal:AbortSignal,emit:(event:any)
   if(!match)throw Error('تعذّر تحديد معرّف المنتج من الرابط.');
   const videoLimit=body.mediaType==='photo'?0:body.targetVideoCount;
   const photoLimit=body.mediaType==='video'?0:body.targetPhotoCount;
-  const seen=new Set<string>();let videos=0,photos=0;
+  const seen=new Set<string>(), reviews=new Set<string>(), inspected=new Set<string>();let videos=0,photos=0;
   const full=()=>videos>=videoLimit&&photos>=photoLimit;
+  function add(asset:any){
+    const video=asset.mediaType==='video';
+    const key=video?videoIdentity(asset.mediaUrl):asset.mediaUrl;
+    const review=String(asset.reviewId||asset.sourceUrl?.match(/\/customer-reviews\/(R[A-Z0-9]+)/i)?.[1]||'');
+    if(seen.has(key)||video&&(videos>=videoLimit||review&&reviews.has(review))||!video&&photos>=photoLimit)return;
+    seen.add(key);if(video){videos++;if(review)reviews.add(review);}else photos++;
+    emit({type:'result',asset:{...asset,id:crypto.randomUUID()}});
+  }
+  async function readPublicListing(asin:string){
+    const listing='https://www.amazon.com/dp/'+asin;
+    const response=await fetcher('/api/stream-search',{method:'POST',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      searchId:crypto.randomUUID(),productName:body.productName,productUrl:listing,sourcePlatform:'amazon',mediaType:body.mediaType,
+      targetVideoCount:videoLimit,targetPhotoCount:photoLimit
+    })});
+    if(!response.ok||!response.body)return;
+    const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
+    try{
+      while(!full()){
+        const part=await reader.read();buffer+=decoder.decode(part.value,{stream:!part.done});
+        const lines=buffer.split('\n');buffer=lines.pop()||'';
+        for(const line of lines){if(!line.trim())continue;const e=JSON.parse(line),a=e.asset;
+          if(e.type==='result'&&a?.productListingUrl===listing&&safeMediaUrl(a.mediaUrl)&&
+            (a.mediaType==='photo'||a.mediaType==='video'&&/^R[A-Z0-9]+$/.test(a.reviewId)))add(a);
+        }
+        if(part.done)break;
+      }
+    }finally{await reader.cancel().catch(()=>{});}
+  }
   async function readProduct(asin:string){
+    inspected.add(asin);
     emit({type:'progress',message:'قراءة ريفيوهات أمازون للمنتج '+asin});
+    try{await readPublicListing(asin);}catch{signal.throwIfAborted();}
     for(let pass=0;pass<3&&!full();pass++){
       const result=await chromeRequest('product',{asin,market,jobId,transport:'tab'},signal);
       if(result.asin!==asin||result.market!==market||result.transport!=='tab')throw Error('صفحة أمازون لا تخص المنتج المحدد.');
@@ -57,8 +87,7 @@ async function collect(body:any,jobId:string,signal:AbortSignal,emit:(event:any)
       for(const video of parseCustomerVideoBlocks(blocks,asin,market)){
         const key=videoIdentity(video.url);
         if(videos>=videoLimit||seen.has(key)||!video.sourceUrl.includes('/customer-reviews/'))continue;
-        seen.add(key);videos++;
-        emit({type:'result',asset:{id:crypto.randomUUID(),mediaType:'video',platform:'amazon',mediaUrl:video.url,downloadUrl:video.url,sourceUrl:video.sourceUrl,productListingUrl:listing,title:video.title,thumbnailUrl:video.poster}});
+        add({mediaType:'video',platform:'amazon',mediaUrl:video.url,downloadUrl:video.url,sourceUrl:video.sourceUrl,productListingUrl:listing,title:video.title,thumbnailUrl:video.poster});
       }
       for(const review of doc.querySelectorAll('[data-hook="review"]')){
         const variant=review.querySelector('[data-hook="format-strip"]')?.getAttribute('href');
@@ -66,24 +95,21 @@ async function collect(body:any,jobId:string,signal:AbortSignal,emit:(event:any)
         for(const img of review.querySelectorAll('[data-hook="review-image-tile"]')){
           const url=img.getAttribute('src')||'';
           if(photos>=photoLimit||!safeMediaUrl(url)||seen.has(url))continue;
-          seen.add(url);photos++;
-          emit({type:'result',asset:{id:crypto.randomUUID(),mediaType:'photo',platform:'amazon',mediaUrl:url,downloadUrl:url,sourceUrl:listing,productListingUrl:listing,title:'صورة ريفيو عميل',thumbnailUrl:url}});
+          add({mediaType:'photo',platform:'amazon',mediaUrl:url,downloadUrl:url,sourceUrl:listing,productListingUrl:listing,title:'صورة ريفيو عميل',thumbnailUrl:url});
         }
       }
-      if(pass>0&&seen.size===before)break;
+      if(seen.size===before)break;
     }
   }
   await readProduct(match[1]);
   const expansion=body.verifiedExpansion;
-  if(!full()&&expansion?.referenceImage){
-    const response=await findCandidates({...expansion,productName:body.productName},jobId,signal,fetcher);
-    if(response.ok){
-      const data=await response.json();
-      for(const asin of new Set<string>(data.approvedAsins||[])){
-        if(full())break;
-        if(asin!==match[1])await readProduct(asin);
-      }
-    }
+  while(!full()&&expansion?.referenceImage&&inspected.size<5){
+    const response=await findCandidates({...expansion,productName:body.productName},jobId,signal,fetcher,inspected);
+    if(!response.ok)break;
+    const data=await response.json();
+    const next=Array.from(new Set<string>(data.approvedAsins||[])).filter(asin=>!inspected.has(asin));
+    if(!next.length)break;
+    for(const asin of next){if(full()||inspected.size>=5)break;await readProduct(asin);}
   }
   emit({type:'completed',reasonIfPartial:full()?undefined:'العدد المتاح في الريفيوهات المقروءة أقل من العدد المطلوب.'});
 }
