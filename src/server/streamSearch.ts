@@ -292,16 +292,6 @@ export async function resolvePublicPhotos(
       });
     }
 
-    const hiResRegex = /"hiRes"\s*:\s*"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+\.(?:jpg|jpeg|png|webp))"/gi;
-    while ((match = hiResRegex.exec(html)) !== null) {
-      addCandidate({
-        mediaUrl: match[1],
-        sourceUrl: source,
-        title: 'صورة المنتج (عرض البائع)',
-        provenance: 'seller_manufacturer_demo',
-      });
-    }
-
     photoResolveCache.set(source, { value: results, expiresAt: now + EXTRACTION_CACHE_TTL_MS });
     return results.slice(0, maxPhotos);
   }

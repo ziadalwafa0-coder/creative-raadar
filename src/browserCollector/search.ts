@@ -68,7 +68,7 @@ async function collect(body:any,jobId:string,signal:AbortSignal,emit:(event:any)
         const lines=buffer.split('\n');buffer=lines.pop()||'';
         for(const line of lines){if(!line.trim())continue;const e=JSON.parse(line),a=e.asset;
           if(e.type==='result'&&a?.productListingUrl===listing&&safeMediaUrl(a.mediaUrl)&&
-            (a.mediaType==='photo'||a.mediaType==='video'&&/^R[A-Z0-9]+$/.test(a.reviewId)))add(a);
+            (a.mediaType==='photo'&&a.provenance==='unverified_customer_review'||a.mediaType==='video'&&/^R[A-Z0-9]+$/.test(a.reviewId)))add(a);
         }
         if(part.done)break;
       }
