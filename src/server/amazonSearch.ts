@@ -25,6 +25,7 @@ interface QueryCacheEntry {
 }
 
 const QUERY_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour TTL
+const OFFLINE_LISTING_WINDOW_MS = 24 * QUERY_CACHE_TTL_MS;
 const QUERY_CACHE_FILE = path.join(DATA_DIR, 'amazon_query_cache_v2.json');
 const queryCacheMap = new Map<string, QueryCacheEntry>();
 
@@ -35,7 +36,7 @@ function loadQueryCacheFromDisk(): void {
       const now = Date.now();
       if (Array.isArray(raw)) {
         for (const item of raw) {
-          if (item && item.key && Array.isArray(item.candidates) && item.expiresAt > now) {
+          if (item && item.key && Array.isArray(item.candidates) && now-item.cachedAt < OFFLINE_LISTING_WINDOW_MS) {
             queryCacheMap.set(item.key, item);
           }
         }
@@ -54,7 +55,7 @@ function saveQueryCacheToDisk(): void {
     const now = Date.now();
     const active: QueryCacheEntry[] = [];
     for (const [k, v] of queryCacheMap.entries()) {
-      if (v.expiresAt > now) {
+      if (now-v.cachedAt < OFFLINE_LISTING_WINDOW_MS) {
         active.push(v);
       } else {
         queryCacheMap.delete(k);
@@ -201,7 +202,7 @@ export function sortCandidatesByRatingCountDesc<
  * Fetches a single Amazon US search page with 1-hour persistent caching in DATA_DIR.
  * Throws AmazonBlockError if Amazon blocks the request.
  */
-export async function fetchAmazonSearchPage(
+async function fetchLiveSearchPage(
   query: string,
   pageNumber = 1,
   signal?: AbortSignal
@@ -268,6 +269,32 @@ export async function fetchAmazonSearchPage(
  * Convenience helper to fetch up to `maxResults` product candidates across pages,
  * sorted by rating count descending.
  */
+export async function fetchAmazonSearchPage(query:string,pageNumber=1,signal?:AbortSignal) {
+  try { return await fetchLiveSearchPage(query,pageNumber,signal); }
+  catch (error) {
+    signal?.throwIfAborted();
+    if (!(error instanceof AmazonBlockError)) throw error;
+    const words=query.toLowerCase().trim().split(/\s+/);
+    const entries=[...queryCacheMap.values()].filter(entry=>{
+      const [term,page]=entry.key.split('::p');
+      const terms=term.split(/\s+/);
+      return Number(page)===pageNumber && Date.now()-entry.cachedAt<OFFLINE_LISTING_WINDOW_MS &&
+        (term===words.join(' ') || (terms.length>=2 && terms.every(word=>words.includes(word))));
+    }).sort((a,b)=>b.key.length-a.key.length);
+    for(const entry of entries){
+      const candidates=entry.candidates.filter(c=>evaluateStrictProductTitleMatch(c.title,query).approved);
+      if(candidates.length)return {candidates,fromCache:true};
+    }
+    // One shorter discovery query; the full original title filter still applies.
+    if(error.status===503 && words.length>=5 && pageNumber===1){
+      const shorter=await fetchLiveSearchPage(words.slice(0,3).join(' '),1,signal);
+      const candidates=shorter.candidates.filter(c=>evaluateStrictProductTitleMatch(c.title,query).approved);
+      if(candidates.length)return {...shorter,candidates};
+    }
+    throw error;
+  }
+}
+
 export async function searchAmazonUsProductPages(
   query: string,
   maxResults = 48,
