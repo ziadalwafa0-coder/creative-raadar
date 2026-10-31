@@ -304,6 +304,10 @@ app.post('/api/product-identity/candidates', requireAuth, (req: Request, res: Re
   });
 });
 
+app.get('/api/tiktok/status', requireAuth, (_req: Request, res: Response) => {
+  res.json({configured:Boolean(process.env.APIFY_API_TOKEN?.trim())});
+});
+
 app.post('/api/product-identity/analyze', requireAuth, (req: Request, res: Response) => {
   handleProductImageAnalysis(req, res).catch(error => {
     if (!res.headersSent && !res.destroyed) res.status(503).json({code:'IMAGE_ANALYSIS_UNAVAILABLE', error:'تعذر تحليل الصورة باستخدام Gemini الآن. التحليل المحلي المجاني متاح كبديل.'});

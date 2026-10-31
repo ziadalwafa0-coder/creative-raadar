@@ -22,6 +22,15 @@ export const HomeSearchCard: React.FC = () => {
   const [productUrl, setProductUrl] = useState('');
   const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('video');
   const [platform,setPlatform]=useState<'amazon'|'tiktok'>('amazon');
+  const [tiktokConfigured,setTikTokConfigured]=useState<boolean|null>(null);
+  useEffect(()=>{
+    if(platform!=='tiktok')return;
+    const controller=new AbortController();
+    apiFetch('/api/tiktok/status',{signal:controller.signal}).then(response=>response.json()).then(data=>{
+      if(!controller.signal.aborted)setTikTokConfigured(data.configured===true);
+    }).catch(()=>{if(!controller.signal.aborted)setTikTokConfigured(false);});
+    return ()=>controller.abort();
+  },[platform]);
   const [targetVideoInput, setTargetVideoInput] = useState<string>('10');
   const [targetPhotoInput, setTargetPhotoInput] = useState<string>('10');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -444,8 +453,9 @@ export const HomeSearchCard: React.FC = () => {
           <select value={platform} className="block mt-2 p-2 border rounded-lg" onChange={e=>{
             const next=e.target.value==='tiktok'?'tiktok':'amazon';setPlatform(next);setIdentityCandidates([]);
             if(next==='tiktok')setMediaType('video');
-          }}><option value="amazon">Amazon · ريفيوهات العملاء</option></select>
+          }}><option value="amazon">Amazon · ريفيوهات العملاء</option><option value="tiktok">TikTok · فيديوهات المنتجات</option></select>
         </label>
+        {platform==='tiktok'&&tiktokConfigured===false&&<p className="text-sm text-[#616764]">مصدر TikTok يحتاج إعدادًا من صاحب الموقع. أضف <bdi>APIFY_API_TOKEN</bdi> لحساب Apify بالخطة المجانية في متغيرات السيرفر. البحث المباشر قد يكون مقيدًا.</p>}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
             نوع النتائج
