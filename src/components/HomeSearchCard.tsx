@@ -444,7 +444,7 @@ export const HomeSearchCard: React.FC = () => {
           <select value={platform} className="block mt-2 p-2 border rounded-lg" onChange={e=>{
             const next=e.target.value==='tiktok'?'tiktok':'amazon';setPlatform(next);setIdentityCandidates([]);
             if(next==='tiktok')setMediaType('video');
-          }}><option value="amazon">Amazon</option><option value="tiktok">TikTok · فيديوهات عامة</option></select>
+          }}><option value="amazon">Amazon · ريفيوهات العملاء</option></select>
         </label>
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
