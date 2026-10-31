@@ -21,10 +21,10 @@ export const HomeSearchCard: React.FC = () => {
   const [productName, setProductName] = useState('');
   const [productUrl, setProductUrl] = useState('');
   const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('video');
-  const [platform,setPlatform]=useState<'amazon'|'tiktok'>('amazon');
+  const [platform,setPlatform]=useState<'amazon'|'tiktok'|'all'>('amazon');
   const [tiktokConfigured,setTikTokConfigured]=useState<boolean|null>(null);
   useEffect(()=>{
-    if(platform!=='tiktok')return;
+    if(platform==='amazon')return;
     const controller=new AbortController();
     apiFetch('/api/tiktok/status',{signal:controller.signal}).then(response=>response.json()).then(data=>{
       if(!controller.signal.aborted)setTikTokConfigured(data.configured===true);
@@ -237,7 +237,7 @@ export const HomeSearchCard: React.FC = () => {
         productName: effectiveName,
         productUrl: selectedUrl || undefined,
         mediaType,
-        sourcePlatform: 'amazon',
+        sourcePlatform: platform,
         targetVideoCount: safeVideoCount,
         targetPhotoCount: safePhotoCount,
         referenceImage: imagePreview,
@@ -370,7 +370,7 @@ export const HomeSearchCard: React.FC = () => {
                   setIsSubmitting(true); setValidationError(null);
                   try {
                     await startStreamingSearch({ productName: productName.trim() || commercialName, productUrl: candidate.url,
-                      mediaType, sourcePlatform: 'amazon', targetVideoCount: clampCount(targetVideoInput), targetPhotoCount: clampCount(targetPhotoInput),
+                      mediaType, sourcePlatform: platform, targetVideoCount: clampCount(targetVideoInput), targetPhotoCount: clampCount(targetPhotoInput),
                       referenceImage: imagePreview, imageConfirmedLocally: true,
                       verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:commercialName.trim(),profile:cloudProfileRef.current} : undefined });
                   } catch (error) { setValidationError(error instanceof Error ? error.message : 'تعذر بدء البحث.'); }
@@ -451,11 +451,12 @@ export const HomeSearchCard: React.FC = () => {
         {/* 3) Media Type Selector (فيديوهات / صور / الاثنين) */}
         <label className="block text-sm font-semibold">المصدر
           <select value={platform} className="block mt-2 p-2 border rounded-lg" onChange={e=>{
-            const next=e.target.value==='tiktok'?'tiktok':'amazon';setPlatform(next);setIdentityCandidates([]);
+            const next=e.target.value==='tiktok'?'tiktok':e.target.value==='all'?'all':'amazon';setPlatform(next);setIdentityCandidates([]);
             if(next==='tiktok')setMediaType('video');
-          }}><option value="amazon">Amazon · ريفيوهات العملاء</option><option value="tiktok">TikTok · فيديوهات المنتجات</option></select>
+          }}><option value="amazon">Amazon · ريفيوهات العملاء</option><option value="tiktok">TikTok · فيديوهات المنتجات</option><option value="all">Amazon + TikTok</option></select>
         </label>
-        {platform==='tiktok'&&tiktokConfigured===false&&<p className="text-sm text-[#616764]">مصدر TikTok يحتاج إعدادًا من صاحب الموقع. أضف <bdi>APIFY_API_TOKEN</bdi> لحساب Apify بالخطة المجانية في متغيرات السيرفر. البحث المباشر قد يكون مقيدًا.</p>}
+        {platform==='all'&&<p className="text-sm text-[#616764]">عدد الفيديوهات إجمالي للمصدرين. نبدأ بنصف العدد من أمازون ونطلب الباقي من TikTok. الصور من ريفيوهات أمازون.</p>}
+        {platform!=='amazon'&&tiktokConfigured===false&&<p className="text-sm text-[#616764]">مصدر TikTok يحتاج إعدادًا من صاحب الموقع. البحث المجاني المباشر محدود حاليًا.</p>}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
             نوع النتائج

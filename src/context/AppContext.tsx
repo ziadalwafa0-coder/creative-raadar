@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import {combinedSearch} from '../utils/combinedSearch.ts';
 import { Language, translations } from '../translations/index.ts';
 import { Project, CandidateAsset, ProviderCapability, WorkspaceUsage } from '../types/index.ts';
 import {analyzeImageWithGemini, prepareIdentityImage} from '../utils/geminiIdentity.ts';
@@ -175,11 +176,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (token && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${token}`);
     }
-    const res = await fetch(input, {
+    const options:RequestInit = {
       ...init,
       headers,
       credentials: 'same-origin',
-    });
+    };
+    const res=input==='/api/stream-search'&&init?.body&&JSON.parse(String(init.body)).sourcePlatform==='all'&&JSON.parse(String(init.body)).mediaType!=='photo'
+      ? combinedSearch(options,(url,settings)=>fetch(url,settings))
+      : await fetch(input,options);
     if (res.status === 401) {
       const urlStr = typeof input === 'string' ? input : input.toString();
       if (!urlStr.includes('/api/auth/login') && !urlStr.includes('/api/auth/session')) {

@@ -1,6 +1,11 @@
 import {searchTikTokProvider} from './tiktokProvider.ts';
+import {searchFreeTikTok} from './tiktokFreeSearch.ts';
 export async function searchPublicTikTok(query:string,limit:number,signal:AbortSignal){
   if(process.env.APIFY_API_TOKEN?.trim())return searchTikTokProvider(query,limit,signal);
+  try{
+    const free=await searchFreeTikTok(query,limit,signal);
+    if(free.length)return free;
+  }catch{signal.throwIfAborted();}
   const url=new URL('https://www.tiktok.com/api/search/general/full/');
   url.search=new URLSearchParams({keyword:query.slice(0,160),count:String(Math.min(30,limit)),offset:'0'}).toString();
   const response=await fetch(url,{signal:AbortSignal.any([signal,AbortSignal.timeout(12000)]),headers:{Accept:'application/json'}});
