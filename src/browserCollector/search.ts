@@ -52,7 +52,7 @@ async function collect(body:any,jobId:string,signal:AbortSignal,emit:(event:any)
     const review=String(asset.reviewId||asset.sourceUrl?.match(/\/customer-reviews\/(R[A-Z0-9]+)/i)?.[1]||'');
     if(seen.has(key)||video&&(videos>=videoLimit||review&&reviews.has(review))||!video&&photos>=photoLimit)return;
     seen.add(key);if(video){videos++;if(review)reviews.add(review);}else photos++;
-    emit({type:'result',asset:{...asset,id:crypto.randomUUID()}});
+    emit({type:'result',asset:{...asset,id:crypto.randomUUID(),searchId:body.searchId}});
   }
   async function readPublicListing(asin:string){
     const listing='https://www.amazon.com/dp/'+asin;
