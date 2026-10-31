@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import {browserAwareFetch} from '../browserCollector/search.ts';
 import { Language, translations } from '../translations/index.ts';
 import { Project, CandidateAsset, ProviderCapability, WorkspaceUsage } from '../types/index.ts';
 import {analyzeImageWithGemini, prepareIdentityImage} from '../utils/geminiIdentity.ts';
@@ -175,11 +176,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (token && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${token}`);
     }
-    const res = await fetch(input, {
+    const res = await browserAwareFetch(input, {
       ...init,
       headers,
       credentials: 'same-origin',
-    });
+    },(target,options)=>fetch(target,{...options,headers:new Headers({...Object.fromEntries(headers),...Object.fromEntries(new Headers(options?.headers))}),credentials:'same-origin'}));
     if (res.status === 401) {
       const urlStr = typeof input === 'string' ? input : input.toString();
       if (!urlStr.includes('/api/auth/login') && !urlStr.includes('/api/auth/session')) {

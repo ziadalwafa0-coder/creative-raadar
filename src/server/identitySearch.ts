@@ -5,7 +5,7 @@ import {evaluateStrictProductTitleMatch} from './queryBuilder.ts';
 import {normalizeProductProfile,parseReferenceImage} from './productProfile.ts';
 import type {VisualAttribute} from '../types/index.ts';
 
-const services={search:fetchAmazonSearchPage,picture:fetchProductImageAsBase64,verify:verifyAmazonProductsBatchVisually,ready:isGeminiConfigured};
+export const identityServices={search:fetchAmazonSearchPage,picture:fetchProductImageAsBase64,verify:verifyAmazonProductsBatchVisually,ready:isGeminiConfigured};
 export function identitySearchPlan(query:string,profile?:VisualAttribute) {
   const normalize=(text:string)=>text.toLowerCase().replace(/\s+/g,' ').trim();
   const alternate=[profile?.commercialNameEn,profile?.suggestedNameEn,...(profile?.multilingualQueries?.en || [])]
@@ -13,7 +13,7 @@ export function identitySearchPlan(query:string,profile?:VisualAttribute) {
   return [{query,page:1}, alternate ? {query:alternate,page:1} : {query,page:2}, {query,page:alternate ? 2 : 3}];
 }
 
-export async function searchProductIdentity(input:Record<string,any>,signal:AbortSignal,dependencies=services) {
+export async function searchProductIdentity(input:Record<string,any>,signal:AbortSignal,dependencies=identityServices) {
   const query=String(input.query || '').trim().slice(0,160), name=String(input.productName || '').slice(0,160);
   const reference=parseReferenceImage(input.referenceImage);
   let profile:VisualAttribute | undefined;

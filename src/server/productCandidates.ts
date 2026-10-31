@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { analyzeProductImage, isGeminiConfigured } from './gemini.ts';
 import { parseReferenceImage } from './productProfile.ts';
-import {searchProductIdentity} from './identitySearch.ts';
+import {identityServices,searchProductIdentity} from './identitySearch.ts';
 export {parseReferenceImage} from './productProfile.ts';
 
 const analysisRate = new Map<string, {count: number; until: number}>();
@@ -39,7 +39,14 @@ export async function handleProductCandidates(req: Request, res: Response): Prom
   req.on('aborted', () => controller.abort());
   res.on('close', () => { if (!res.writableEnded) controller.abort(); });
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
-  const result=await searchProductIdentity({...req.body,query,productName},signal);
+  const rows=req.body.browserProducts;
+  if(rows!==undefined && (!Array.isArray(rows)||rows.length>100)){res.status(400).json({error:'Invalid browser candidates'});return;}
+  const dependencies=rows===undefined?identityServices:{...identityServices,search:async(term:string,page=1)=>({
+    fromCache:false,candidates:term!==query||page!==1?[]:rows.filter((r:any)=>r && /^[A-Z0-9]{10}$/.test(r.asin) &&
+      typeof r.title==='string' && typeof r.imageUrl==='string' && /^https:\/\/m\.media-amazon\.com\/images\/I\/[A-Za-z0-9%+._-]+$/.test(r.imageUrl))
+      .map((r:any)=>({asin:r.asin,title:r.title.slice(0,500),imageUrl:r.imageUrl,url:'https://www.amazon.com/dp/'+r.asin,ratingCount:Math.max(0,Number(r.ratingCount)||0)}))
+  })};
+  const result=await searchProductIdentity({...req.body,query,productName},signal,dependencies);
   if(!controller.signal.aborted) res.status(result.verification==='unavailable' ? 503 : 200).json({
     ...result,error:result.verification==='unavailable' ? 'تعذّر استكمال مقارنة الصور الآن؛ أعد المحاولة. لم نحكم بأن المنتج غير موجود.' : undefined,
   });

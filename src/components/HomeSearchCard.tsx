@@ -6,6 +6,7 @@ import { analyzeCommercialName, compareCandidateImages, type IdentityCandidate }
 import { selectCommercialName, type CategoryScore } from '../utils/visualIdentity.ts';
 import { analyzeImageWithGemini, prepareIdentityImage } from '../utils/geminiIdentity.ts';
 import type { VisualAttribute } from '../types/index.ts';
+import {chromeRequest} from '../utils/chromeBridge.ts';
 
 export const HomeSearchCard: React.FC = () => {
   const {
@@ -19,6 +20,14 @@ export const HomeSearchCard: React.FC = () => {
   } = useApp();
 
   const [productName, setProductName] = useState('');
+  const [collectorVersion,setCollectorVersion]=useState('');
+  useEffect(()=>{
+    const controller=new AbortController();
+    chromeRequest('ping',{},controller.signal,1800).then(reply=>{
+      if(reply.browserNavigation&&!controller.signal.aborted)setCollectorVersion(String(reply.version));
+    }).catch(()=>{});
+    return ()=>controller.abort();
+  },[]);
   const [productUrl, setProductUrl] = useState('');
   const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('video');
   const [targetVideoInput, setTargetVideoInput] = useState<string>('10');
@@ -246,6 +255,7 @@ export const HomeSearchCard: React.FC = () => {
         onSubmit={handleSubmit}
         className="bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-5 sm:p-7 space-y-5"
       >
+        {collectorVersion&&<p className="text-sm text-[#247C72]">قارئ أمازون متصل عبر Chrome · {collectorVersion}</p>}
         {/* 1) Large Drag/Drop Product Image Box */}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
