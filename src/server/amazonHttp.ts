@@ -214,10 +214,13 @@ export async function fetchAmazonHtml(
     }
     if (response) {
       const check = detectAmazonBlock(response.status, response.html, minHtmlChars);
-      if (check.blocked || response.status < 200 || response.status >= 400) {
+      if (response.status === 503 && !/validatecaptcha|robot check|ap_login_form/i.test(response.html)) {
+        console.warn('[Scrapling] Service unavailable; checking the regular HTTP transport');
+      } else if (check.blocked || response.status < 200 || response.status >= 400) {
         throw new AmazonBlockError(url, response.status, check.reason || `HTTP ${response.status}`);
+      } else {
+        return response.html;
       }
-      return response.html;
     }
   }
 
