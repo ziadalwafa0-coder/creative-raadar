@@ -22,14 +22,14 @@ export async function searchProductIdentity(input:Record<string,any>,signal:Abor
   const diagnostics={checkedCount:0,queriesTried:[] as string[],sourceIncomplete:false,reason:''};
   const products:Array<{asin:string;title:string;url:string;image:string}>=[];
   const finish=(verification:string)=>({query,products,verification,approvedAsins:verification==='gemini' ? products.map(product=>product.asin) : [],diagnostics});
-  if(cloud && profile?.confidence==='low') { diagnostics.reason='REFERENCE_UNCERTAIN'; return finish('gemini'); }
+  if(cloud && profile?.confidence==='low' && input.allowSimilar!==true) { diagnostics.reason='REFERENCE_UNCERTAIN'; return finish('gemini'); }
   const seen=new Set<string>();
   for(const plan of identitySearchPlan(query,profile)) {
     signal.throwIfAborted();
     diagnostics.queriesTried.push(`${plan.query} (page ${plan.page})`);
     const {candidates}=await dependencies.search(plan.query,plan.page,signal);
     const relevant=candidates.filter(candidate=>!seen.has(candidate.asin) && candidate.imageUrl && evaluateStrictProductTitleMatch(candidate.title,plan.query,name).approved)
-      .sort((a,b)=>b.ratingCount-a.ratingCount).slice(0,8);
+      .sort((a,b)=>(b.recentPurchases||0)-(a.recentPurchases||0)||b.ratingCount-a.ratingCount).slice(0,8);
     relevant.forEach(candidate=>seen.add(candidate.asin));
     const batch:typeof products=[];
     for(let offset=0;offset<relevant.length;offset+=3) {
@@ -42,6 +42,10 @@ export async function searchProductIdentity(input:Record<string,any>,signal:Abor
       batch.push(...pictures.filter((picture):picture is NonNullable<typeof picture>=>picture!==null));
     }
     signal.throwIfAborted();
+    if(input.allowSimilar===true && batch.length){
+      products.push(...batch);
+      return finish('similar-confirmation');
+    }
     if(!cloud) { if(batch.length) { products.push(...batch); return finish('not-requested'); } continue; }
     if(!batch.length) continue;
     const decisions=await dependencies.verify(reference!.base64,reference!.mimeType,name||query,profile,

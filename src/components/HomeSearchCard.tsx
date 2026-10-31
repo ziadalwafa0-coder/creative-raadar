@@ -6,7 +6,6 @@ import { analyzeCommercialName, compareCandidateImages, type IdentityCandidate }
 import { selectCommercialName, type CategoryScore } from '../utils/visualIdentity.ts';
 import { analyzeImageWithGemini, prepareIdentityImage } from '../utils/geminiIdentity.ts';
 import type { VisualAttribute } from '../types/index.ts';
-import {chromeRequest} from '../utils/chromeBridge.ts';
 
 export const HomeSearchCard: React.FC = () => {
   const {
@@ -20,16 +19,9 @@ export const HomeSearchCard: React.FC = () => {
   } = useApp();
 
   const [productName, setProductName] = useState('');
-  const [collectorVersion,setCollectorVersion]=useState('');
-  useEffect(()=>{
-    const controller=new AbortController();
-    chromeRequest('ping',{},controller.signal,1800).then(reply=>{
-      if(reply.browserNavigation&&!controller.signal.aborted)setCollectorVersion(String(reply.version));
-    }).catch(()=>{});
-    return ()=>controller.abort();
-  },[]);
   const [productUrl, setProductUrl] = useState('');
   const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('video');
+  const [platform,setPlatform]=useState<'amazon'|'tiktok'>('amazon');
   const [targetVideoInput, setTargetVideoInput] = useState<string>('10');
   const [targetPhotoInput, setTargetPhotoInput] = useState<string>('10');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -38,6 +30,7 @@ export const HomeSearchCard: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [commercialName, setCommercialName] = useState('');
+  const [allowSimilar,setAllowSimilar]=useState(true);
   const [scanProgress, setScanProgress] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [identityCandidates, setIdentityCandidates] = useState<IdentityCandidate[]>([]);
@@ -167,6 +160,13 @@ export const HomeSearchCard: React.FC = () => {
 
     try {
       let selectedUrl = trimmedUrl;
+      if(platform==='tiktok'){
+        if(isScanning)throw Error('انتظر اكتمال قراءة الصورة.');
+        const query=commercialName.trim()||trimmedName;
+        if(!query)throw Error('اكتب اسم المنتج للبحث على TikTok.');
+        await startStreamingSearch({productName:query,mediaType:'video',sourcePlatform:'tiktok',targetVideoCount:safeVideoCount,targetPhotoCount:0});
+        return;
+      }
       let expansionQuery = commercialName.trim();
       if (imagePreview && !trimmedUrl) {
         if (isScanning) throw new Error('انتظر اكتمال تحليل الصورة أولًا.');
@@ -184,7 +184,7 @@ export const HomeSearchCard: React.FC = () => {
         setScanProgress(`البحث على أمازون عن: ${query} ثم مقارنة صور المنتجات…`);
         const response = await apiFetch('/api/product-identity/candidates', {
           method: 'POST', headers: {'Content-Type': 'application/json'}, signal: controller.signal,
-          body: JSON.stringify({query, productName: trimmedName, referenceImage:cloudProfileRef.current ? preparedImageRef.current : undefined, profile:cloudProfileRef.current || undefined}),
+          body: JSON.stringify({query, productName: trimmedName, allowSimilar, referenceImage:cloudProfileRef.current ? preparedImageRef.current : undefined, profile:cloudProfileRef.current || undefined}),
         });
         const data = await response.json();
         controller.signal.throwIfAborted();
@@ -198,6 +198,11 @@ export const HomeSearchCard: React.FC = () => {
           ? 'لم تظهر نتائج منتجات قابلة للفحص بالأسماء المستخدمة. عدّل اسم البحث التجاري أو أضف رابط نفس المنتج.'
           : `لم نؤكد تطابقًا ضمن ${data.diagnostics?.checkedCount || 0} صورة تم فحصها. جرّب اسمًا أدق أو أضف رابط نفس المنتج؛ هذا لا يعني أنه غير موجود على أمازون.`);
         let approved: IdentityCandidate | undefined;
+        if(data.verification==='similar-confirmation'){
+          setIdentityCandidates(products);
+          setScanProgress('اختَر التصميم المناسب. نرتّب حسب المشتريات الأخيرة عند توفرها، ثم عدد التقييمات. قد يختلف الموديل عن صورتك.');
+          return;
+        }
         try {
           const scores = data.verification === 'gemini'
             ? products.map(product => ({id:product.asin, accepted:Array.isArray(data.approvedAsins) && data.approvedAsins.includes(product.asin), similarity:1}))
@@ -255,7 +260,6 @@ export const HomeSearchCard: React.FC = () => {
         onSubmit={handleSubmit}
         className="bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-5 sm:p-7 space-y-5"
       >
-        {collectorVersion&&<p className="text-sm text-[#247C72]">قارئ أمازون متصل عبر Chrome · {collectorVersion}</p>}
         {/* 1) Large Drag/Drop Product Image Box */}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
@@ -340,6 +344,7 @@ export const HomeSearchCard: React.FC = () => {
         {imagePreview && (
           <div className="space-y-2 rounded-xl bg-[#EAF3F2] p-4">
             <label htmlFor="commercial-query" className="block text-sm font-semibold text-[#181B1A]">الاسم التجاري للبحث على أمازون</label>
+            <label className="flex gap-2 items-center text-sm"><input type="checkbox" checked={allowSimilar} onChange={e=>{identityRequestRef.current?.abort();setIdentityCandidates([]);setAllowSimilar(e.target.checked);}}/>عرض المنتجات الرائجة من نفس النوع ولو اختلف التصميم</label>
             <input id="commercial-query" value={commercialName} onChange={event => { identityRequestRef.current?.abort(); commercialEditedRef.current = true; setCommercialName(event.target.value); setIdentityCandidates([]); }} dir="ltr" placeholder="مثال: Microfiber Spray Mop Refillable Bottle" className="w-full h-11 px-3 rounded-lg border border-[#D5D9D2] bg-white text-sm" />
             <p role="status" className="text-xs text-[#247C72]">{scanProgress}</p>
             <p className="text-xs text-[#616764]">Gemini يستقبل نسخة مصغرة للتحليل عند تفعيله. الموقع لا يحفظ صورة التحليل على السيرفر. البديل المحلي المجاني ينزّل نموذجًا أول مرة؛ الاسم المقترح لا يثبت الماركة أو الموديل.</p>
@@ -361,7 +366,7 @@ export const HomeSearchCard: React.FC = () => {
                       verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:commercialName.trim(),profile:cloudProfileRef.current} : undefined });
                   } catch (error) { setValidationError(error instanceof Error ? error.message : 'تعذر بدء البحث.'); }
                   finally { setIsSubmitting(false); }
-                }}>ده نفس المنتج</button>
+                }}>{allowSimilar?'اختَر هذا المنتج':'ده نفس المنتج'}</button>
               </div>)}
             </div>
           </section>
@@ -435,6 +440,12 @@ export const HomeSearchCard: React.FC = () => {
         </div>
 
         {/* 3) Media Type Selector (فيديوهات / صور / الاثنين) */}
+        <label className="block text-sm font-semibold">المصدر
+          <select value={platform} className="block mt-2 p-2 border rounded-lg" onChange={e=>{
+            const next=e.target.value==='tiktok'?'tiktok':'amazon';setPlatform(next);setIdentityCandidates([]);
+            if(next==='tiktok')setMediaType('video');
+          }}><option value="amazon">Amazon</option><option value="tiktok">TikTok · فيديوهات عامة</option></select>
+        </label>
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
             نوع النتائج
@@ -454,7 +465,7 @@ export const HomeSearchCard: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setMediaType('photo')}
+              disabled={platform==='tiktok'} onClick={() => setMediaType('photo')}
               className={`h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
                 mediaType === 'photo'
                   ? 'bg-[#EAF3F2] border-[#247C72] text-[#247C72] font-semibold'
@@ -466,7 +477,7 @@ export const HomeSearchCard: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setMediaType('both')}
+              disabled={platform==='tiktok'} onClick={() => setMediaType('both')}
               className={`h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
                 mediaType === 'both'
                   ? 'bg-[#EAF3F2] border-[#247C72] text-[#247C72] font-semibold'

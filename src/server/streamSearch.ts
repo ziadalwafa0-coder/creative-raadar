@@ -42,6 +42,7 @@ import { DATA_DIR } from './config.ts';
 import { downloadMedia, prewarmMediaInBackground, DOWNLOADS_DIR } from './downloader.ts';
 import { analyzeProductImage, isGeminiConfigured } from './gemini.ts';
 import {collectVerifiedListings} from './verifiedCollection.ts';
+import {searchPublicTikTok} from './tiktokSearch.ts';
 
 export interface EphemeralAsset {
   id: string;
@@ -540,6 +541,20 @@ export async function handleStreamSearch(
   let totalProductsDiscovered = 0;
 
   try {
+    if(req.body.sourcePlatform==='tiktok'){
+      if(mediaType!=='video')throw Error('بحث TikTok يدعم الفيديوهات فقط.');
+      const items=await searchPublicTikTok(rawProductName,targetVideoCount,abortController.signal);
+      for(const item of items){
+        const timestamp=new Date().toISOString();
+        sendEvent({type:'result',searchId,timestamp,asset:{id:'tt-'+searchId+'-'+(++foundVideos),searchId,
+          mediaType:'video',platform:'tiktok',title:item.title,mediaUrl:item.url,downloadUrl:item.url,sourceUrl:item.source,
+          productListingUrl:item.source,reviewerOrChannel:item.author,provenance:'unresolved_source',isCustomerReview:false,
+          matchCategory:'permitted_variation',matchScore:0,userFacingMatchLabel:'نتيجة بحث بالاسم',sentiment:'neutral',collectedAt:timestamp}});
+      }
+      sendEvent({type:'completed',searchId,timestamp:new Date().toISOString(),requestedCount:targetVideoCount,foundCount:foundVideos,
+        downloadableCount:foundVideos,reasonIfPartial:foundVideos<targetVideoCount?'نتائج TikTok المتاحة أقل من المطلوب.':undefined});
+      return;
+    }
     if (rawReferenceImage && !isGeminiConfigured() && !rawProductUrl) {
       throw new Error('حدّد المنتج أولًا بتحليل الصورة المحلي أو أضف رابط صفحته. لن نكمل البحث بالاسم وحده مع تجاهل الصورة.');
     }

@@ -9,6 +9,16 @@ const input={query:'Spray Mop',productName:'مساحة وبخاخة',profile,ref
 const candidate=(i:number)=>({asin:'B0'+String(i).padStart(8,'0'),title:'Spray Mop Refillable Bottle with Microfiber Pads',url:'https://www.amazon.com/dp/B0'+String(i).padStart(8,'0'),imageUrl:'https://m.media-amazon.com/images/I/image._AC_UL320_.jpg',ratingCount:100});
 const verdict=(asin:string,approved:boolean)=>({asin,approved,matchScore:approved ? 96 : 30,matchCategory:approved ? 'exact_design' as const : 'mismatched' as const,userFacingLabelAr:'',reasonAr:''});
 
+test('popular alternatives are ordered by recent purchases and require user selection',async()=>{
+  const result=await searchProductIdentity({...input,allowSimilar:true},new AbortController().signal,{
+    ready:()=>true,picture:async()=>({base64:'photo',mimeType:'image/jpeg'}),
+    verify:async()=>{throw Error('similar listings must never be auto-approved');},
+    search:async()=>({fromCache:false,candidates:[{...candidate(1),ratingCount:8000,recentPurchases:50},{...candidate(2),ratingCount:30,recentPurchases:1000}]})
+  });
+  assert.deepEqual(result.products.map(p=>p.asin),[candidate(2).asin,candidate(1).asin]);
+  assert.deepEqual(result.approvedAsins,[]);assert.equal(result.verification,'similar-confirmation');
+});
+
 test('an empty first batch continues to a distinct commercial query and never returns rejected listings',async()=>{
   const calls:string[]=[];let verified=0;
   const result=await searchProductIdentity(input,new AbortController().signal,{

@@ -63,7 +63,7 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#E2E5DF] bg-[#FAFBF9]">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-xs font-bold px-2.5 py-0.5 rounded-md border shrink-0 bg-[#EAF3F2] text-[#247C72] border-[#247C72]/30">
-              أمازون • Amazon
+              {asset.platform==='tiktok'?'TikTok':'أمازون • Amazon'}
             </span>
             <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-md border shrink-0 ${provInfo.badge}`}>
               {provInfo.label}

@@ -10,6 +10,7 @@ export interface AmazonUsProductCandidate {
   url: string;
   imageUrl?: string;
   ratingCount: number;
+  recentPurchases?: number;
   reviewOrSalesScore?: number;
   matchScore?: number;
   matchCategory?: 'exact_design' | 'permitted_variation' | 'mismatched';
@@ -163,6 +164,7 @@ export function parseAmazonSearchResultsHtml(html: string): AmazonUsProductCandi
 
     const imgSrcMatch = block.match(/<img[^>]+class="[^"]*s-image[^"]*"[^>]+src="(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/i);
     const ratingCount = extractRatingCountFromCardHtml(block);
+    const recentPurchases = parseCompactNumber(block.match(/([\d,.]+[KM]?\+?)\s+bought\s+in\s+(?:the\s+)?past\s+month/i)?.[1] || '');
 
     seenAsins.add(asin);
     results.push({
@@ -171,6 +173,7 @@ export function parseAmazonSearchResultsHtml(html: string): AmazonUsProductCandi
       url: `https://www.amazon.com/dp/${asin}`,
       imageUrl: imgSrcMatch ? imgSrcMatch[1] : undefined,
       ratingCount,
+      recentPurchases,
       reviewOrSalesScore: ratingCount,
     });
   }
@@ -182,9 +185,11 @@ export function parseAmazonSearchResultsHtml(html: string): AmazonUsProductCandi
  * Sorts product candidates by rating COUNT descending as the primary key (then match score descending).
  */
 export function sortCandidatesByRatingCountDesc<
-  T extends { ratingCount?: number; reviewOrSalesScore?: number; matchScore?: number }
+  T extends { ratingCount?: number; reviewOrSalesScore?: number; matchScore?: number; recentPurchases?: number }
 >(candidates: T[]): T[] {
   return [...candidates].sort((a, b) => {
+    const purchases = (b.recentPurchases || 0) - (a.recentPurchases || 0);
+    if (purchases) return purchases;
     const rA = a.ratingCount ?? a.reviewOrSalesScore ?? 0;
     const rB = b.ratingCount ?? b.reviewOrSalesScore ?? 0;
     if (rB !== rA) return rB - rA;

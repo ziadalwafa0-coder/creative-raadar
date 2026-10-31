@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import {browserAwareFetch} from '../browserCollector/search.ts';
 import { Language, translations } from '../translations/index.ts';
 import { Project, CandidateAsset, ProviderCapability, WorkspaceUsage } from '../types/index.ts';
 import {analyzeImageWithGemini, prepareIdentityImage} from '../utils/geminiIdentity.ts';
@@ -176,11 +175,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (token && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${token}`);
     }
-    const res = await browserAwareFetch(input, {
+    const res = await fetch(input, {
       ...init,
       headers,
       credentials: 'same-origin',
-    },(target,options)=>fetch(target,{...options,headers:new Headers({...Object.fromEntries(headers),...Object.fromEntries(new Headers(options?.headers))}),credentials:'same-origin'}));
+    });
     if (res.status === 401) {
       const urlStr = typeof input === 'string' ? input : input.toString();
       if (!urlStr.includes('/api/auth/login') && !urlStr.includes('/api/auth/session')) {
@@ -406,19 +405,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               downloadUrl: a.downloadUrl || a.mediaUrl,
               provenance: a.provenance || 'unverified_customer_review',
               matchCategory: a.matchCategory || 'exact_design',
-              matchScore: a.matchScore || 92,
+              matchScore: a.matchScore ?? 92,
               userFacingMatchLabel: a.userFacingMatchLabel || 'نفس المنتج (تطابق 100%)',
               visibleDifferences: [],
               supportingObservations: [
                 isTikTokAsset
-                  ? 'مطابقة مباشرة مع المنتج المطلوب على تيك توك (TikTok)'
+                  ? 'ظهر الفيديو في بحث TikTok باسم المنتج'
                   : 'مطابقة مباشرة مع المنتج المطلوب على أمازون أمريكا',
               ],
               unknowns: [],
               contentDescription: isTikTokAsset
-                ? 'فيديو مراجعة وعرض منتج إيجابي على تيك توك'
-                : 'مراجعة عميل إيجابية على أمازون أمريكا',
-              sentiment: 'positive',
+                ? 'فيديو عام ظهر في نتائج البحث على TikTok'
+                : 'محتوى من مراجعات أمازون أمريكا',
+              sentiment: a.sentiment || 'neutral',
               downloadStatus: 'verified_available',
               collectedAt: a.collectedAt || new Date().toISOString(),
               rightsStatus: 'public_reference',
