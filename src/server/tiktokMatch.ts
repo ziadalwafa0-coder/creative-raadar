@@ -1,9 +1,10 @@
+import {tikTokFrame} from './tiktokFrame.ts';
 import {evaluateStrictProductTitleMatch,extractAsinFromUrl,resolveProductIdentityFromUrl} from './queryBuilder.ts';
 import {parseReferenceImage} from './productProfile.ts';
 import {fetchProductImageAsBase64} from './amazonHttp.ts';
 import {verifyAmazonProductsBatchVisually} from './gemini.ts';
 
-type Clip={title:string;thumbnailUrl?:string};
+type Clip={title:string;thumbnailUrl?:string;url?:string};
 export async function filterTikTokProducts<T extends Clip>(pool:T[],body:Record<string,unknown>,limit:number,signal:AbortSignal){
   const name=String(body.productName||'').slice(0,200);
   if(!body.matchImage && !body.selectedProductUrl){
@@ -24,10 +25,14 @@ export async function filterTikTokProducts<T extends Clip>(pool:T[],body:Record<
     const batch=pool.slice(i,i+5);
     const pictures=await Promise.all(batch.map(async(item,index)=>{
       const asin='CLIP'+index;
-      let url:URL;try{url=new URL(item.thumbnailUrl||'');}catch{return null;}
-      if(url.protocol!=='https:'||url.username||url.password||url.port||
-        !/(^|\.)(tiktokcdn(?:-us|-eu)?\.com|tiktokv\.com)$/.test(url.hostname))return null;
-      const pic=await fetchProductImageAsBase64(url.href,signal);
+      let pic=null;
+      try{
+        const url=new URL(item.thumbnailUrl||'');
+        if(url.protocol==='https:'&&!url.username&&!url.password&&!url.port&&
+          /(^|\.)(tiktokcdn(?:-us|-eu)?\.com|tiktokv\.com)$/.test(url.hostname))pic=await fetchProductImageAsBase64(url.href,signal);
+      }catch{signal.throwIfAborted();}
+      if(!pic)pic=await tikTokFrame(item.url,signal);
+      if(pic)item.thumbnailUrl='data:'+pic.mimeType+';base64,'+pic.base64;
       return pic?{asin,title:String(item.title).slice(0,500),imageBase64:pic.base64,imageMimeType:pic.mimeType}:null;
     }));
     const valid=pictures.filter(p=>p!==null);

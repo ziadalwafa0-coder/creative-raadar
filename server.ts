@@ -312,7 +312,7 @@ app.post('/api/tiktok/matches',requireAuth,async(req,res)=>{
   res.on('close',()=>{if(!res.writableEnded)controller.abort();});
   try{
     const matched=await filterTikTokProducts(rows,req.body,rows.length,AbortSignal.any([controller.signal,AbortSignal.timeout(45000)]));
-    if(!controller.signal.aborted)res.json({sources:matched.map(row=>row.source)});
+    if(!controller.signal.aborted)res.json({sources:matched.map(row=>row.source),posters:Object.fromEntries(matched.map(row=>[row.source,row.thumbnailUrl]))});
   }catch{if(!controller.signal.aborted)res.status(503).json({sources:[]});}
 });
 app.get('/api/tiktok/status', requireAuth, (_req: Request, res: Response) => {

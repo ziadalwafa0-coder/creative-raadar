@@ -174,25 +174,6 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
   const targetVideos = project.targetVideoCount || 10;
   const targetPhotos = project.targetPhotoCount || 10;
 
-  const uniqueProductUrls = Array.from(
-    new Set(
-      candidates
-        .map((c) => {
-          if (c.productListingUrl) return c.productListingUrl;
-          const dpMatch =
-            c.sourceUrl?.match(/https?:\/\/(?:www\.)?amazon\.[a-z.]+\/[^\s"'<>]*\/dp\/([A-Z0-9]{10})/i) ||
-            c.sourceUrl?.match(/https?:\/\/(?:www\.)?amazon\.[a-z.]+\/dp\/([A-Z0-9]{10})/i);
-          if (dpMatch) return `https://www.amazon.com/dp/${dpMatch[1].toUpperCase()}`;
-          return undefined;
-        })
-        .filter((u): u is string => Boolean(u))
-    )
-  );
-
-  const fallbackSearchUrl = `https://www.amazon.com/s?k=${encodeURIComponent(
-    project.productProfile?.suggestedNameEn || project.name
-  )}`;
-
   const quotaSummary =
     project.mediaTypeRequested === 'video'
       ? `فيديوهات: ${videoCount}/${targetVideos}`
@@ -216,46 +197,6 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
             <h1 className="text-sm sm:text-base font-bold text-[#181B1A] truncate">
               {project.name}
             </h1>
-
-            {/* Direct Link to Product Page right under Product Name */}
-            <div className="flex flex-wrap items-center gap-1.5 mt-1">
-              {uniqueProductUrls.length > 0 ? (
-                uniqueProductUrls.map((prodUrl, idx) => (
-                  <a
-                    key={prodUrl}
-                    href={prodUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#247C72] hover:text-[#1E665E] bg-[#EAF3F2]/80 hover:bg-[#DCECE9] border border-[#247C72]/25 px-2.5 py-0.5 rounded-lg transition-colors max-w-full"
-                    title={prodUrl}
-                  >
-                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">
-                      {uniqueProductUrls.length > 1
-                        ? `رابط مباشر لصفحة المنتج (${idx + 1})`
-                        : 'رابط مباشر لصفحة المنتج'}
-                    </span>
-                    <span
-                      className="text-[11px] font-mono text-[#247C72]/85 truncate max-w-[180px] sm:max-w-[260px]"
-                      dir="ltr"
-                    >
-                      {prodUrl.replace(/^https?:\/\/(www\.)?/i, '')}
-                    </span>
-                  </a>
-                ))
-              ) : (
-                <a
-                  href={fallbackSearchUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#247C72] hover:text-[#1E665E] bg-[#EAF3F2]/80 hover:bg-[#DCECE9] border border-[#247C72]/25 px-2.5 py-0.5 rounded-lg transition-colors max-w-full"
-                  title={fallbackSearchUrl}
-                >
-                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                  <span>رابط مباشر لصفحة المنتج على أمازون</span>
-                </a>
-              )}
-            </div>
 
             {/* Single-line progress summary */}
             <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-[#616764]">

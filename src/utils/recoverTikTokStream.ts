@@ -21,16 +21,17 @@ export async function recoverTikTokStream(response:Response, options:RequestInit
       const batch=items.slice(offset,offset+10).filter(item=>!seen.has(item.source));
       if(!batch.length)continue;
       const check=await fetch('/api/tiktok/matches',{method:'POST',headers:options.headers,signal,
-        body:JSON.stringify({productName,matchImage,selectedProductUrl,items:batch.map(({source,title,thumbnailUrl})=>({source,title,thumbnailUrl}))})});
+        body:JSON.stringify({productName,matchImage,selectedProductUrl,items:batch.map(({source,title,thumbnailUrl,url})=>({source,title,thumbnailUrl,url}))})});
       if(!check.ok)break;
-      const accepted=new Set((await check.json()).sources);
+      const verified=await check.json();
+      const accepted=new Set(verified.sources);
       for(const item of batch){
       if(!accepted.has(item.source))continue;
       if(seen.has(item.source)||seen.size>=target)continue;
       seen.add(item.source);
       recovered.push({type:'result',searchId,asset:{
         id:'tt-'+searchId+'-'+item.source.split('/').pop(),searchId,platform:'tiktok',mediaType:'video',
-        thumbnailUrl:item.thumbnailUrl,mediaUrl:item.url,downloadUrl:item.url,productListingUrl:item.source,sourceUrl:item.source,
+        thumbnailUrl:verified.posters?.[item.source]||item.thumbnailUrl,mediaUrl:item.url,downloadUrl:item.url,productListingUrl:item.source,sourceUrl:item.source,
         reviewerOrChannel:item.author,title:item.title,provenance:'unresolved_source',
         matchCategory:'permitted_variation',matchScore:0,userFacingMatchLabel:matchImage||selectedProductUrl?'تطابق بصري مع صورة المنتج':'مطابقة وصف الفيديو',
         sentiment:'neutral',collectedAt:new Date().toISOString()
