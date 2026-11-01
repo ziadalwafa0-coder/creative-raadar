@@ -1,3 +1,4 @@
+import {discoverIndexedListings} from './indexedListings.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.ts';
@@ -25,7 +26,7 @@ interface QueryCacheEntry {
 }
 
 const QUERY_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour TTL
-const OFFLINE_LISTING_WINDOW_MS = 24 * QUERY_CACHE_TTL_MS;
+const OFFLINE_LISTING_WINDOW_MS = 7 * 24 * QUERY_CACHE_TTL_MS;
 const QUERY_CACHE_FILE = path.join(DATA_DIR, 'amazon_query_cache_v2.json');
 const queryCacheMap = new Map<string, QueryCacheEntry>();
 
@@ -152,10 +153,11 @@ export function parseAmazonSearchResultsHtml(html: string): AmazonUsProductCandi
     if (!asin || seenAsins.has(asin)) continue;
     const block = match[2];
 
-    const imgAltMatch = block.match(/<img[^>]+class="[^"]*s-image[^"]*"[^>]+alt="([^"]+)"/i);
+    const imageTag=block.match(/<img\b(?=[^>]*\bclass=["'][^"']*\bs-image\b[^"']*["'])[^>]*>/i)?.[0] || '';
+    const imgAltMatch=imageTag.match(/\balt=["']([^"']+)["']/i);
     const h2TextMatch =
-      block.match(/<h2[^>]*aria-label="([^"]+)"/i) ||
-      block.match(/<h2[^>]*>[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>[\s\S]*?<\/h2>/i);
+      block.match(/<h2\b[^>]*aria-label="([^"]+)"/i) ||
+      block.match(/<h2\b[^>]*>([\s\S]*?)<\/h2>/i);
 
     const rawTitle = decodeHtmlEntities(
       (h2TextMatch ? h2TextMatch[1] : imgAltMatch ? imgAltMatch[1] : '').replace(/<[^>]+>/g, '')
@@ -163,7 +165,7 @@ export function parseAmazonSearchResultsHtml(html: string): AmazonUsProductCandi
 
     if (!rawTitle || rawTitle.length < 5) continue;
 
-    const imgSrcMatch = block.match(/<img[^>]+class="[^"]*s-image[^"]*"[^>]+src="(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/i);
+    const imgSrcMatch=imageTag.match(/\ssrc=["'](https:\/\/m\.media-amazon\.com\/images\/I\/[^"']+)["']/i);
     const ratingCount = extractRatingCountFromCardHtml(block);
     const recentPurchases = parseCompactNumber(block.match(/([\d,.]+[KM]?\+?)\s+bought\s+in\s+(?:the\s+)?past\s+month/i)?.[1] || '');
 
@@ -285,11 +287,31 @@ export async function fetchAmazonSearchPage(query:string,pageNumber=1,signal?:Ab
       const candidates=entry.candidates.filter(c=>evaluateStrictProductTitleMatch(c.title,query).approved);
       if(candidates.length)return {candidates,fromCache:true};
     }
-    // One shorter discovery query; the full original title filter still applies.
-    if(error.status===503 && words.length>=5 && pageNumber===1){
-      const shorter=await fetchLiveSearchPage(words.slice(0,3).join(' '),1,signal);
-      const candidates=shorter.candidates.filter(c=>evaluateStrictProductTitleMatch(c.title,query).approved);
-      if(candidates.length)return {...shorter,candidates};
+    // A new wording can match listings from a previous search, including another page.
+    if(pageNumber===1 && words.length>=2){
+      const ranked=new Map<string,AmazonUsProductCandidate>();
+      for(const entry of queryCacheMap.values()){
+        if(Date.now()-entry.cachedAt>=OFFLINE_LISTING_WINDOW_MS)continue;
+        for(const product of entry.candidates){
+          const match=evaluateStrictProductTitleMatch(product.title,query);
+          if(match.approved && match.matchScore>=90 && product.imageUrl)ranked.set(product.asin,product);
+        }
+      }
+      if(ranked.size)return {candidates:sortCandidatesByRatingCountDesc([...ranked.values()]).slice(0,48),fromCache:true};
+    }
+    if(pageNumber===1){
+      const candidates=await discoverIndexedListings(query,signal).catch(()=>{signal?.throwIfAborted();return [];});
+      if(candidates.length){
+        const now=Date.now(), key=words.join(' ')+'::p1';
+        queryCacheMap.set(key,{key,candidates,cachedAt:now,expiresAt:now+5*60*1000});
+        saveQueryCacheToDisk();
+        return {candidates,fromCache:false};
+      }
+      if(error.status===503 && words.length>=5){
+        const shorter=await fetchLiveSearchPage(words.slice(0,3).join(' '),1,signal);
+        const matching=shorter.candidates.filter(c=>evaluateStrictProductTitleMatch(c.title,query).approved);
+        if(matching.length)return {...shorter,candidates:matching};
+      }
     }
     throw error;
   }

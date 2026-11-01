@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {searchProductIdentity,identitySearchPlan} from './identitySearch.ts';
 import {normalizeProductProfile} from './productProfile.ts';
-import {productComparisonImageUrl} from './amazonHttp.ts';
+import {AmazonBlockError,productComparisonImageUrl} from './amazonHttp.ts';
 
 const profile=normalizeProductProfile({suggestedNameEn:'Spray Mop',confidence:'high',multilingualQueries:{en:['Spray Mop Refillable Bottle','ممسحة','123']}});
 const input={query:'Spray Mop',productName:'مساحة وبخاخة',profile,referenceImage:'data:image/jpeg;base64,'+'A'.repeat(100)};
@@ -64,4 +64,20 @@ test('visual comparisons use a larger version of the same Amazon image, not a re
   assert.equal(productComparisonImageUrl('https://m.media-amazon.com/images/I/ABC._AC_UL320_.jpg'),'https://m.media-amazon.com/images/I/ABC._SL800_.jpg');
   assert.equal(productComparisonImageUrl('https://example.com/images/I/ABC._AC_UL320_.jpg'),'https://example.com/images/I/ABC._AC_UL320_.jpg');
   assert.deepEqual(profile.multilingualQueries.en,['Spray Mop','Spray Mop Refillable Bottle']);
+});
+
+test('a blocked first query still allows an independently verified alternate query',async()=>{
+  const deps={ready:()=>true,verify:async()=>null,picture:async()=>({base64:'photo',mimeType:'image/jpeg'}),
+    search:async(query:string)=>{
+      if(query===input.query)throw new AmazonBlockError('https://www.amazon.com/s',503,'blocked');
+      return {fromCache:false,candidates:[candidate(7)]};
+    }};
+  const result=await searchProductIdentity({...input,allowSimilar:true},new AbortController().signal,deps);
+  assert.equal(result.products[0]?.asin,candidate(7).asin);
+  assert.deepEqual(result.approvedAsins,[]);
+  const blocked=await searchProductIdentity(input,new AbortController().signal,{...deps,search:async()=>{
+    throw new AmazonBlockError('',503,'blocked');
+  }});
+  assert.equal(blocked.diagnostics.reason,'SEARCH_BLOCKED');
+  assert.deepEqual(blocked.products,[]);
 });

@@ -1,5 +1,5 @@
 import {fetchAmazonSearchPage} from './amazonSearch.ts';
-import {fetchProductImageAsBase64} from './amazonHttp.ts';
+import {AmazonBlockError,fetchProductImageAsBase64} from './amazonHttp.ts';
 import {isGeminiConfigured,verifyAmazonProductsBatchVisually} from './gemini.ts';
 import {evaluateStrictProductTitleMatch} from './queryBuilder.ts';
 import {normalizeProductProfile,parseReferenceImage} from './productProfile.ts';
@@ -24,10 +24,19 @@ export async function searchProductIdentity(input:Record<string,any>,signal:Abor
   const finish=(verification:string)=>({query,products,verification,approvedAsins:verification==='gemini' ? products.map(product=>product.asin) : [],diagnostics});
   if(cloud && profile?.confidence==='low' && input.allowSimilar!==true) { diagnostics.reason='REFERENCE_UNCERTAIN'; return finish('gemini'); }
   const seen=new Set<string>();
+  const blockedQueries=new Set<string>();
   for(const plan of identitySearchPlan(query,profile)) {
     signal.throwIfAborted();
+    if(blockedQueries.has(plan.query))continue;
     diagnostics.queriesTried.push(`${plan.query} (page ${plan.page})`);
-    const {candidates}=await dependencies.search(plan.query,plan.page,signal);
+    let candidates;
+    try{({candidates}=await dependencies.search(plan.query,plan.page,signal));}
+    catch(error){
+      signal.throwIfAborted();
+      if(!(error instanceof AmazonBlockError))throw error;
+      blockedQueries.add(plan.query);
+      continue;
+    }
     const relevant=candidates.filter(candidate=>!seen.has(candidate.asin) && candidate.imageUrl && evaluateStrictProductTitleMatch(candidate.title,plan.query,name).approved)
       .sort((a,b)=>(b.recentPurchases||0)-(a.recentPurchases||0)||b.ratingCount-a.ratingCount).slice(0,8);
     relevant.forEach(candidate=>seen.add(candidate.asin));
@@ -56,6 +65,6 @@ export async function searchProductIdentity(input:Record<string,any>,signal:Abor
     products.push(...batch.filter(product=>decisions.get(product.asin)?.approved));
     if(products.length) return finish('gemini');
   }
-  diagnostics.reason=diagnostics.sourceIncomplete ? 'INCOMPLETE_IMAGES' : diagnostics.checkedCount ? 'NO_CONFIRMED_MATCH' : 'NO_READABLE_PRODUCTS';
+  diagnostics.reason=blockedQueries.size && !seen.size ? 'SEARCH_BLOCKED' : diagnostics.sourceIncomplete ? 'INCOMPLETE_IMAGES' : diagnostics.checkedCount ? 'NO_CONFIRMED_MATCH' : 'NO_READABLE_PRODUCTS';
   return finish(cloud ? 'gemini' : 'not-requested');
 }

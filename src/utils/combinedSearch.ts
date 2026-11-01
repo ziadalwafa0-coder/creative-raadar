@@ -62,7 +62,10 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
             warnings.push(message);send({type:'warning',message});
           }
         };
-        await collect('amazon',amazonShare);
+        if(parent.amazonDiscoveryBlocked){
+          const message='تعذر تأكيد منتج أمازون. لاستكمال حصته أضف رابط المنتج في البحث. بدأ بحث تيك توك بالاسم.';
+          warnings.push(message);send({type:'warning',message});
+        }else await collect('amazon',amazonShare);
         const amazonFilledShare=found===amazonShare;
         if(found<target)await collect('tiktok',explicit?quotas.tiktok:target-found);
         // Amazon starts at the first result again. Ask for the full quota and deduplicate the replay.

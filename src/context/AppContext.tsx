@@ -41,6 +41,7 @@ interface AppContextType {
     productUrl?: string;
     mediaType: Project['mediaTypeRequested'];
     sourcePlatform?: 'all' | 'amazon' | 'tiktok';
+    amazonDiscoveryBlocked?:boolean;
     sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
     targetPhotoCount: number;
@@ -218,6 +219,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     productUrl?: string;
     mediaType: Project['mediaTypeRequested'];
     sourcePlatform?: 'all' | 'amazon' | 'tiktok';
+    amazonDiscoveryBlocked?:boolean;
     sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
     targetPhotoCount: number;
@@ -347,6 +349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           productUrl: params.productUrl,
           mediaType: params.mediaType,
           sourcePlatform,
+          amazonDiscoveryBlocked:params.amazonDiscoveryBlocked,
           sourceVideoCounts: params.sourceVideoCounts,
       targetVideoCount: effectiveVideoTarget,
           targetPhotoCount: effectivePhotoTarget,

@@ -196,6 +196,16 @@ export const HomeSearchCard: React.FC = () => {
         controller.signal.throwIfAborted();
         if (!response.ok) throw new Error(data.error || 'تعذر قراءة صور نتائج أمازون.');
         const products: IdentityCandidate[] = data.products || [];
+        if(!products.length && data.diagnostics?.reason==='SEARCH_BLOCKED'){
+          if(platform==='all' && sourceVideoCounts){
+            await startStreamingSearch({productName:query,mediaType,sourcePlatform:'all',sourceVideoCounts,
+              amazonDiscoveryBlocked:true,targetVideoCount:safeVideoCount,targetPhotoCount:safePhotoCount,
+              referenceImage:imagePreview});
+            return;
+          }
+          document.getElementById('product-url-input')?.focus();
+          throw new Error('تعذّر العثور على صفحة مؤكدة من البحث. الصق رابط نفس المنتج من أمازون في خانة الرابط المباشر واضغط ابدأ البحث.');
+        }
         if (!products.length) throw new Error(data.diagnostics?.reason === 'REFERENCE_UNCERTAIN'
           ? 'تحليل الصورة غير حاسم. جرّب لقطة أوضح للمنتج أو أضف رابط صفحته للتأكيد.'
           : data.diagnostics?.sourceIncomplete

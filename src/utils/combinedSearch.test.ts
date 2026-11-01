@@ -55,3 +55,16 @@ test('explicit quotas keep a short Amazon result separate from the requested Tik
   assert.deepEqual(calls,[7,3]);
   assert.equal(events.at(-1).foundCount,5);
 });
+
+test('unavailable Amazon identity keeps its quota empty and still requests the TikTok quota',async()=>{
+  const requests:string[]=[];
+  const response=combinedSearch({method:'POST',body:JSON.stringify({...body,amazonDiscoveryBlocked:true,sourceVideoCounts:{amazon:8,tiktok:2}})},async(_url,init)=>{
+    const req=JSON.parse(String(init?.body));requests.push(req.sourcePlatform);
+    assert.equal(req.targetVideoCount,2);
+    return new Response(JSON.stringify({type:'result',asset:{platform:'tiktok',mediaType:'video',mediaUrl:'https://example.com/video.mp4'}}));
+  });
+  const events=(await response.text()).trim().split('\n').map(line=>JSON.parse(line));
+  assert.deepEqual(requests,['tiktok']);
+  assert.equal(events.at(-1).foundCount,1);
+  assert.match(events.at(-1).reasonIfPartial,/أمازون/);
+});
