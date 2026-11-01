@@ -30,6 +30,7 @@ export const commercialProducts = [
   ['Kneeling Support Knee Seat', 'a wearable kneeling support seat attached around the knees for gardening work'],
   ['Car Lumbar Support Cushion', 'a curved foam lower back support cushion for a car seat'],
   ['Kids Folding Play Mat', 'a large soft colorful padded folding play mat for children'],
+  ['Portable Manual Espresso Maker', 'a compact hand operated portable espresso coffee maker with a cylindrical body, coffee basket, cup and pumping handle'],
   ['', 'an unrelated object, food, book, animal or empty scene rather than the requested household product'],
 ] as const;
 
@@ -64,7 +65,9 @@ export function selectCommercialName(scores: CategoryScore[], nameHint = '') {
   const ranked = scores.filter(x => Number.isFinite(x.score)).sort((a, b) => b.score - a.score);
   let best = ranked[0];
   const hint = nameHint.toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
+  const coffeeIndex=commercialProducts.findIndex(product=>product[0]==='Portable Manual Espresso Maker');
   const families: Array<[RegExp, number[]]> = [
+    [/قهو|قهوة|اسبرسو|اسبريسو|espresso|coffee|minipresso|nanopresso|wacaco/, [coffeeIndex]],
     [/مساح|ممسح|\bmops?\b/, /بخاخ|spray/.test(hint) ? [0] : [0,1]],
     [/مكنس|\bvacuum\b/, [4,5]], [/جزام|\bshoe\b/, /خشب|bamboo|wood/.test(hint) ? [7] : [6,7]],
     [/ستاند.*ملابس|حامل.*ملابس|clothes rack|garment rack/, [8]],

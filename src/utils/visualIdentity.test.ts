@@ -56,3 +56,9 @@ test('replacing a product aborts model inference and ignores late identification
     assert.equal((await next).query, 'new product');
   } finally { Object.assign(globalThis, {Worker:original}); }
 });
+
+test('a coffee product hint cannot become a vacuum cleaner search',()=>{
+ const coffee=commercialProducts.findIndex(p=>p[0]==='Portable Manual Espresso Maker');
+ assert.equal(selectCommercialName([{index:5,score:0.32},{index:coffee,score:0.30}],'ماكينة قهوة محمولة').query,'Portable Manual Espresso Maker');
+ assert.throws(()=>selectCommercialName([{index:5,score:0.51},{index:coffee,score:0.21}],'Wacaco Minipresso GR'));
+});
