@@ -24,15 +24,28 @@ export async function searchFreeTikTok(query:string,limit:number,signal:AbortSig
   let cursor='0';
   while(videos.size<target){
     const count=Math.min(30,target-videos.size);
-    const url=new URL('https://www.tikwm.com/api/feed/search/');
-    url.search=new URLSearchParams({keywords:query.slice(0,160),count:String(count),cursor}).toString();
+    const params=new URLSearchParams({keywords:query.slice(0,160),count:String(count),cursor});
     try{
-      const response=await request(url,{signal:AbortSignal.any([signal,AbortSignal.timeout(12000)]),headers:{Accept:'application/json'}});
-      if(!response.ok)throw Error('TikTok HTTP '+response.status);
-      const data=await response.json();
-      for(const video of parseFreeTikTokVideos(data,count))videos.set(video.source,video);
-      const next=String(data.data.cursor??'');
-      if(!data.data.hasMore||!next||cursors.has(next)||cursors.size>=Math.ceil(target/10)+2)break;
+      let page;
+      for(const origin of ['https://www.tikwm.com','https://tikwm.com']){
+        try{
+          const response=await request(new URL('/api/feed/search/?'+params,origin),{
+            signal:AbortSignal.any([signal,AbortSignal.timeout(12000)]),headers:{Accept:'application/json'}
+          });
+          if(!response.ok)throw Error('TikTok HTTP '+response.status);
+          const data=await response.json();
+          const items=parseFreeTikTokVideos(data,count);
+          page={items,cursor:data.data.cursor,hasMore:data.data.hasMore};
+          break;
+        }catch(error){
+          signal.throwIfAborted();
+          if(origin==='https://tikwm.com')throw error;
+        }
+      }
+      if(!page)break;
+      for(const video of page.items)videos.set(video.source,video);
+      const next=String(page.cursor??'');
+      if(!page.hasMore||!next||cursors.has(next)||cursors.size>=Math.ceil(target/10)+2)break;
       cursor=next;
       cursors.add(cursor);
     }catch(error){
