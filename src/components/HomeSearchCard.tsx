@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext.tsx';
 import { Upload, X, RefreshCw, Video, Image as ImageIcon, Layers, Link as LinkIcon, ExternalLink } from 'lucide-react';
 import { Project } from '../types/index.ts';
-import { analyzeCommercialName, compareCandidateImages, type IdentityCandidate } from '../utils/productVision.ts';
+import { analyzeCommercialName, type IdentityCandidate } from '../utils/productVision.ts';
 import { selectCommercialName, type CategoryScore } from '../utils/visualIdentity.ts';
 import { analyzeImageWithGemini, prepareIdentityImage } from '../utils/geminiIdentity.ts';
 import type { VisualAttribute } from '../types/index.ts';
@@ -32,8 +32,8 @@ export const HomeSearchCard: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [commercialName, setCommercialName] = useState('');
-  const [localNameNeedsConfirmation,setLocalNameNeedsConfirmation]=useState(false);
-  const [allowSimilar,setAllowSimilar]=useState(true);
+  const [nameNeedsConfirmation,setNameNeedsConfirmation]=useState(false);
+  const [allowSimilar,setAllowSimilar]=useState(false);
   const [scanProgress, setScanProgress] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [identityCandidates, setIdentityCandidates] = useState<IdentityCandidate[]>([]);
@@ -54,7 +54,7 @@ export const HomeSearchCard: React.FC = () => {
   useEffect(() => {
     const controller = new AbortController();
     visionController.current = controller;
-    setLocalNameNeedsConfirmation(false);setCommercialName(''); setIdentityCandidates([]); setScanProgress('');
+    setNameNeedsConfirmation(false);setCommercialName(''); setIdentityCandidates([]); setScanProgress('');
     imageScoresRef.current = null; commercialEditedRef.current = false;
     cloudProfileRef.current = null; preparedImageRef.current = ''; analyzedNameRef.current = '';
     if (!imagePreview) { setIsScanning(false); return () => controller.abort(); }
@@ -62,6 +62,11 @@ export const HomeSearchCard: React.FC = () => {
     setScanProgress('جاري تحديد الاسم التجاري من صورة المنتج والاسم المكتوب…');
     (async () => {
       try {
+        await new Promise<void>((resolve,reject)=>{
+          const timer=setTimeout(resolve,450);
+          controller.signal.addEventListener('abort',()=>{clearTimeout(timer);reject(controller.signal.reason);},{once:true});
+        });
+        controller.signal.throwIfAborted();
         const preparedImage = await prepareIdentityImage(imagePreview);
         controller.signal.throwIfAborted();
         preparedImageRef.current = preparedImage;
@@ -70,7 +75,7 @@ export const HomeSearchCard: React.FC = () => {
           const result = await analyzeImageWithGemini(preparedImage, nameHint, controller.signal, apiFetch);
           controller.signal.throwIfAborted();
           cloudProfileRef.current = result.profile; analyzedNameRef.current = nameHint;
-          if (!commercialEditedRef.current) setCommercialName(result.query);
+          if (!commercialEditedRef.current) {setCommercialName(result.query);setNameNeedsConfirmation(true);}
           setScanProgress(`تحليل Gemini: ${result.profile.confidence === 'low' ? 'الهوية غير مؤكدة؛ يلزم تأكيد المنتج' : 'تم اقتراح اسم البحث من الصورة والاسم'}. الماركة والموديل لا يُعتبران مؤكدين إلا إذا ظهرا بوضوح.`);
           return;
         } catch { controller.signal.throwIfAborted(); }
@@ -80,14 +85,14 @@ export const HomeSearchCard: React.FC = () => {
         controller.signal.throwIfAborted();
         imageScoresRef.current = identity.scores;
         const latest = selectCommercialName(identity.scores, nameHintRef.current);
-        if (!commercialEditedRef.current) {setCommercialName(latest.query);setLocalNameNeedsConfirmation(true);}
+        if (!commercialEditedRef.current) {setCommercialName(latest.query);setNameNeedsConfirmation(true);}
         setScanProgress(identity.uncertain ? 'تحليل محلي: اقتراح منخفض الثقة؛ راجع الاسم قبل البحث. ستتم مقارنة صور النتائج قبل جمع الفيديوهات.' : 'تحليل محلي: اسم مقترح حسب الصورة؛ لا يؤكد الماركة أو الموديل. يمكنك تعديله.');
       } catch (error) {
         if (!controller.signal.aborted) setScanProgress(error instanceof Error ? error.message : 'تعذر تحليل الصورة؛ اكتب اسم البحث التجاري بالإنجليزية.');
       } finally { if (!controller.signal.aborted) setIsScanning(false); }
     })();
     return () => { controller.abort(); identityRequestRef.current?.abort(); };
-  }, [imagePreview, imageRevision]);
+  }, [imagePreview, imageRevision, productName]);
 
   const handleImageFile = (file?: File) => {
     if (!file) return;
@@ -154,8 +159,8 @@ export const HomeSearchCard: React.FC = () => {
       return;
     }
 
-    if(imagePreview && localNameNeedsConfirmation){
-      setValidationError('راجع اسم البحث المقترح بجوار الصورة وأكّد أنه نفس المنتج أو عدّله قبل بدء البحث.');
+    if(imagePreview && nameNeedsConfirmation){
+      setValidationError('راجع اسم البحث بجوار صورة المنتج وأكّده أو عدّله قبل بدء البحث.');
       document.getElementById('commercial-query')?.focus();
       return;
     }
@@ -221,34 +226,9 @@ export const HomeSearchCard: React.FC = () => {
           : data.diagnostics?.reason === 'NO_READABLE_PRODUCTS'
           ? 'لم تظهر نتائج منتجات قابلة للفحص بالأسماء المستخدمة. عدّل اسم البحث التجاري أو أضف رابط نفس المنتج.'
           : `لم نؤكد تطابقًا ضمن ${data.diagnostics?.checkedCount || 0} صورة تم فحصها. جرّب اسمًا أدق أو أضف رابط نفس المنتج؛ هذا لا يعني أنه غير موجود على أمازون.`);
-        let approved: IdentityCandidate | undefined;
-        if(data.verification==='similar-confirmation'){
-          setIdentityCandidates(products);
-          setScanProgress('اختَر التصميم المناسب. نرتّب حسب المشتريات الأخيرة عند توفرها، ثم عدد التقييمات. قد يختلف الموديل عن صورتك.');
-          return;
-        }
-        try {
-          const scores = data.verification === 'gemini'
-            ? products.map(product => ({id:product.asin, accepted:Array.isArray(data.approvedAsins) && data.approvedAsins.includes(product.asin), similarity:1}))
-            : await compareCandidateImages(await (await fetch(imagePreview)).blob(), products, controller.signal, setScanProgress);
-          const ranked = scores.filter(score => score.accepted).sort((a, b) => b.similarity - a.similarity);
-          if (ranked.length === 1 || (ranked.length > 1 && ranked[0].similarity - ranked[1].similarity >= 0.02)) {
-            approved = products.find(product => product.asin === ranked[0].id);
-          }
-          if (!approved) {
-            const order = new Map(scores.map(score => [score.id, score.similarity]));
-            products.sort((a, b) => (order.get(b.asin) || 0) - (order.get(a.asin) || 0));
-          }
-        } catch { controller.signal.throwIfAborted(); }
-        if (!approved) {
-          setIdentityCandidates(products.slice(0, 4));
-          setScanProgress('المطابقة التلقائية غير حاسمة. اختَر نفس المنتج للتأكيد؛ لن نجمع فيديوهات لمنتج آخر لإكمال العدد.');
-          return;
-        }
-        selectedUrl = approved.url;
-        selectedImage=approved.image;
-        selectedTitle=approved.title;
-        expansionQuery = query;
+        setIdentityCandidates(products.slice(0,8));
+        setScanProgress('اختَر صفحة المنتج الصحيحة لتثبيت البحث عليها.');
+        return;
       }
       await startStreamingSearch({
         productName: selectedTitle,
@@ -371,10 +351,10 @@ export const HomeSearchCard: React.FC = () => {
           <div className="space-y-2 rounded-xl bg-[#EAF3F2] p-4">
             <label htmlFor="commercial-query" className="block text-sm font-semibold text-[#181B1A]">الاسم التجاري للبحث على أمازون</label>
             <label className="flex gap-2 items-center text-sm"><input type="checkbox" checked={allowSimilar} onChange={e=>{identityRequestRef.current?.abort();setIdentityCandidates([]);setAllowSimilar(e.target.checked);}}/>عرض المنتجات الرائجة من نفس النوع ولو اختلف التصميم</label>
-            <input id="commercial-query" value={commercialName} onChange={event => { identityRequestRef.current?.abort(); commercialEditedRef.current = true;setLocalNameNeedsConfirmation(false); setCommercialName(event.target.value); setIdentityCandidates([]); }} dir="ltr" placeholder="مثال: Microfiber Spray Mop Refillable Bottle" className="w-full h-11 px-3 rounded-lg border border-[#D5D9D2] bg-white text-sm" />
+            <input id="commercial-query" value={commercialName} onChange={event => { identityRequestRef.current?.abort(); commercialEditedRef.current = true;setNameNeedsConfirmation(false); setCommercialName(event.target.value); setIdentityCandidates([]); }} dir="ltr" placeholder="مثال: Microfiber Spray Mop Refillable Bottle" className="w-full h-11 px-3 rounded-lg border border-[#D5D9D2] bg-white text-sm" />
             <p role="status" className="text-xs text-[#247C72]">{scanProgress}</p>
-            {localNameNeedsConfirmation && <label className="flex gap-2 items-center text-sm text-amber-900 bg-amber-50 p-3 rounded-lg">
-              <input type="checkbox" checked={false} onChange={()=>{setLocalNameNeedsConfirmation(false);setValidationError(null);}} />
+            {nameNeedsConfirmation && <label className="flex gap-2 items-center text-sm text-amber-900 bg-amber-50 p-3 rounded-lg">
+              <input type="checkbox" checked={false} onChange={()=>{setNameNeedsConfirmation(false);setValidationError(null);}} />
               راجعت الاسم المقترح وهو نفس المنتج الموجود في الصورة
             </label>}
             <p className="text-xs text-[#616764]">Gemini يستقبل نسخة مصغرة للتحليل عند تفعيله. الموقع لا يحفظ صورة التحليل على السيرفر. البديل المحلي المجاني ينزّل نموذجًا أول مرة؛ الاسم المقترح لا يثبت الماركة أو الموديل.</p>
@@ -416,10 +396,10 @@ export const HomeSearchCard: React.FC = () => {
               identityRequestRef.current?.abort();
               setProductName(e.target.value);
               setIdentityCandidates([]);
-              if (imageScoresRef.current && !commercialEditedRef.current) {
-                try { setCommercialName(selectCommercialName(imageScoresRef.current, e.target.value).query);setLocalNameNeedsConfirmation(true); }
-                catch (error) { setCommercialName(''); setScanProgress(error instanceof Error ? error.message : 'راجع الاسم والصورة.'); }
-              }
+              visionController.current?.abort();
+              cloudProfileRef.current=null;
+              setCommercialName('');
+              setNameNeedsConfirmation(Boolean(imagePreview));
               if (validationError) setValidationError(null);
             }}
             placeholder="أدخل اسم المنتج (مثال: جزامة 9 دور بغطاء)..."

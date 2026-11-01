@@ -1,3 +1,4 @@
+import {selectedAmazonListing} from './productScope.ts';
 import type { Request, Response } from 'express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -565,9 +566,7 @@ export async function handleStreamSearch(
         downloadableCount:foundVideos,reasonIfPartial:foundVideos<targetVideoCount?'نتائج TikTok المتاحة أقل من المطلوب.':undefined});
       return;
     }
-    if (rawReferenceImage && !isGeminiConfigured() && !rawProductUrl) {
-      throw new Error('حدّد المنتج أولًا بتحليل الصورة المحلي أو أضف رابط صفحته. لن نكمل البحث بالاسم وحده مع تجاهل الصورة.');
-    }
+    selectedAmazonListing(req.body);
     const linkCandidate =
       rawProductUrl ||
       (/^https?:\/\//i.test(rawProductName) || /\b(?:\/dp\/|B0[A-Z0-9]{8})\b/i.test(rawProductName)
@@ -1939,15 +1938,24 @@ export class JobWorker {
       };
       updateState('searching', `جاري البحث في أمازون عن "${project.name}"...`);
 
-      const queries = await buildAmazonUsQueries(project.name, undefined, undefined, abortController.signal);
-      const { candidates } = await fetchAmazonSearchPage(queries.primaryQuery, 1, abortController.signal);
-      const sorted = sortCandidatesByRatingCountDesc(candidates);
+      const selected=selectedAmazonListing({productUrl:project.productListingUrl,productName:project.name,
+        hasReferenceImage:project.referenceImages?.length>0,verifiedExpansion:project.verifiedExpansion});
+      const queries=await buildAmazonUsQueries(project.name,undefined,undefined,abortController.signal);
+      let sorted:AmazonUsProductCandidate[];
+      if(selected){
+        const identity=await resolveProductIdentityFromUrl(selected,abortController.signal);
+        if(!identity?.asin)throw Error('تعذر قراءة صفحة المنتج المحدد.');
+        sorted=[{asin:identity.asin,url:selected,title:identity.extractedTitle,imageUrl:identity.imageUrl,ratingCount:0}];
+      }else{
+        const {candidates}=await fetchAmazonSearchPage(queries.primaryQuery,1,abortController.signal);
+        sorted=sortCandidatesByRatingCountDesc(candidates);
+      }
 
       let foundVideos = 0;
       for (const page of sorted) {
         if (abortController.signal.aborted || foundVideos >= maxVideos) break;
         const verdict = evaluateStrictProductTitleMatch(page.title, queries.primaryQuery, project.name);
-        if (!verdict.approved) continue;
+        if (!selected && !verdict.approved) continue;
 
         project.counters.sourcesInspected++;
         const vids = await fetchAmazonUsProductVideos(page.url, abortController.signal);
