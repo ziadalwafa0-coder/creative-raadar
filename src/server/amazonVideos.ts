@@ -373,15 +373,28 @@ export async function fetchAmazonUsProductVideos(
     ? `https://www.amazon.com/product-reviews/${asin}?mediaType=media_reviews_only`
     : null;
 
+  let limited=false;
+  const report=(reason:string)=>{limited=true;options.onLimited?.(reason);};
+  const reportFailure=(error:unknown)=>{
+    if(!(error instanceof AmazonBlockError))return report('تعذّر الاتصال بإحدى صفحات أمازون.');
+    if(/sign-in required/i.test(error.message))return report('أمازون طلب تسجيل الدخول لقراءة صفحة المراجعات.');
+    if(/captcha|robot check/i.test(error.message))return report('أمازون طلب التحقق قبل عرض الصفحة.');
+    if(error.status===429)return report('أمازون حدّ عدد الطلبات مؤقتًا.');
+    if(error.status===403)return report('أمازون رفض الوصول إلى الصفحة.');
+    if(error.status===503)return report('إحدى صفحات أمازون لم تكن متاحة وقت البحث.');
+    report('تعذّرت قراءة محتوى إحدى صفحات أمازون.');
+  };
   let blockError: AmazonBlockError | null = null;
   const [dpHtml, reviewsHtml] = await Promise.all([
     fetchHtml(dpUrl, { signal, timeoutMs: 8000, minHtmlChars: 4000, referer: 'https://www.amazon.com/' }).catch((err: unknown) => {
+      reportFailure(err);
       if (err instanceof AmazonBlockError) blockError = err;
       console.warn(`[AmazonVideos] Product page fetch error (${dpUrl}):`, (err as Error)?.message || err);
       return '';
     }),
     reviewsMediaUrl
       ? fetchHtml(reviewsMediaUrl, { signal, timeoutMs: 8000, minHtmlChars: 2500, referer: dpUrl }).catch((err: unknown) => {
+          reportFailure(err);
           if (err instanceof AmazonBlockError && !blockError) blockError = err;
           console.warn(`[AmazonVideos] Media reviews fetch error (${reviewsMediaUrl}):`, (err as Error)?.message || err);
           return '';
@@ -415,7 +428,6 @@ export async function fetchAmazonUsProductVideos(
     }
   };
   await deliver();
-  if (blockError) options.onLimited?.('أمازون قيّد الوصول لبعض صفحات الريفيوهات');
   let exhausted = Boolean(reviewsHtml) && !nextAmazonReviewPage(reviewsHtml,dpUrl,asin);
   let html = reviewsHtml;
   const visited = new Set<string>();
@@ -423,7 +435,7 @@ export async function fetchAmazonUsProductVideos(
     signal?.throwIfAborted();
     const next = nextAmazonReviewPage(html, dpUrl, asin);
     if (!next) break;
-    if (visited.has(next)) { exhausted=false; options.onLimited?.('أمازون كرر نفس صفحة الريفيوهات'); break; }
+    if (visited.has(next)) { exhausted=false; report('كررت أمازون نفس صفحة المراجعات.'); break; }
     visited.add(next); exhausted=false;
     try {
       html = await fetchHtml(next,{signal,timeoutMs:8000,minHtmlChars:2500,referer:dpUrl});
@@ -431,7 +443,7 @@ export async function fetchAmazonUsProductVideos(
       for (const video of videos) if (!mergedByUuid.has(video.streamUuid)) mergedByUuid.set(video.streamUuid,video);
       // Image-only and duplicate-only pages may still link to more video reviews.
       await deliver(); exhausted=!nextAmazonReviewPage(html,dpUrl,asin);
-    } catch (error) { signal?.throwIfAborted(); options.onLimited?.(error instanceof Error ? error.message : 'تعذر فتح صفحة الريفيوهات التالية'); break; }
+    } catch (error) { signal?.throwIfAborted(); reportFailure(error); break; }
   }
   // Amazon's public product carousel can return a different subset on each view.
   // Merge a bounded number of ordinary successful page reads; never retry a block.
@@ -446,7 +458,7 @@ export async function fetchAmazonUsProductVideos(
       unchangedViews=before===mergedByUuid.size ? unchangedViews+1 : 0;
       await deliver();
       if(unchangedViews>=2) break;
-    } catch(error) { signal?.throwIfAborted(); options.onLimited?.('تعذر قراءة المزيد من فيديوهات صفحة المنتج'); break; }
+    } catch(error) { signal?.throwIfAborted(); reportFailure(error); break; }
   }
   const merged = Array.from(mergedByUuid.values());
 
@@ -457,7 +469,7 @@ export async function fetchAmazonUsProductVideos(
       isNegative: merged.length === 0,
       cachedAt: now,
       expiresAt: now + ASIN_CACHE_TTL_MS,
-      exhausted,
+      exhausted:exhausted&&!limited,
     });
     saveAsinCacheToDisk();
   }
@@ -472,8 +484,10 @@ export function nextAmazonReviewPage(html:string, baseUrl:string, asin:string):s
   if (!href) return null;
   try {
     const url = new URL(decodeEntities(href),baseUrl);
-    if (url.protocol !== 'https:' || !['amazon.com','www.amazon.com'].includes(url.hostname) || url.username || url.password || url.port || !url.pathname.startsWith(`/product-reviews/${asin}`)) return null;
-    if (url.pathname.slice(`/product-reviews/${asin}`.length).replace(/\/$/,'') !== '') return null;
+    if (url.protocol !== 'https:' || !['amazon.com','www.amazon.com'].includes(url.hostname) || url.username || url.password || url.port) return null;
+    const parts=url.pathname.split('/').filter(Boolean);
+    const pos=parts.indexOf('product-reviews');
+    if(pos<0 || pos>1 || parts[pos+1]!==asin || parts.slice(pos+2).some((part,i)=>i!==0||!/^ref=[a-z0-9_-]+$/i.test(part)))return null;
     url.searchParams.set('mediaType','media_reviews_only');
     return url.href;
   } catch { return null; }

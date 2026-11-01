@@ -34,7 +34,7 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
           const event=JSON.parse(line);
           if(event.type==='result'&&event.asset){
             const asset=event.asset;
-            const key=asset.mediaType+':'+(asset.mediaType==='video'?(asset.reviewId||(source==='tiktok'&&asset.sourceUrl)||asset.mediaUrl):asset.mediaUrl);
+            const key=asset.mediaType+':'+(asset.mediaType==='video'?((source==='tiktok'&&asset.sourceUrl)||asset.mediaUrl):asset.mediaUrl);
             if(asset.mediaType==='video'&&sourceVideos>=count)return;
             if(!asset.mediaUrl||seen.has(key)||(asset.mediaType==='video'?found>=target:photos>=Number(parent.targetPhotoCount||0)))return;
             seen.add(key);

@@ -65,3 +65,9 @@ test('extra listings require image evidence and a server visual approval; client
   for await(const batch of collectVerifiedListings(input,'مساحة',new Set(),new AbortController().signal,()=>{},()=>false,failed)) rejectedRows.push(...batch);
   assert.equal(rejectedRows.length,0);
 });
+
+test('next page accepts a product slug and Amazon tracking suffix only for the selected ASIN',()=>{
+  const tracked=next(2).replace('/product-reviews/','/espresso/product-reviews/').replace('?pageNumber','/ref=cm_cr_arp_d_paging_btm_next_2?pageNumber');
+  assert.match(nextAmazonReviewPage(tracked,'https://www.amazon.com',asin)||'',/pageNumber=2/);
+  assert.equal(nextAmazonReviewPage(tracked.replace(asin,'B099999999'),'https://www.amazon.com',asin),null);
+});

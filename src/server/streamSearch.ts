@@ -547,7 +547,7 @@ export async function handleStreamSearch(
   let assetCounter = 0;
   let inspectedCount = 0;
   let pagesBlockedCount = 0;
-  let reviewAccessLimited = false;
+  const reviewLimits=new Set<string>();
   let totalProductsDiscovered = 0;
 
   try {
@@ -826,7 +826,7 @@ export async function handleStreamSearch(
               limit:targetVideoCount-foundVideos,
               excludeStreamUuids:seenStreamUuids, shouldStop:isGoalReached,
               onVideo:video=>emitVideo(video,page,titleVerdict),
-              onLimited:()=>{ reviewAccessLimited=true; },
+              onLimited:reason=>{reviewLimits.add(reason);},
             });
             for (const v of videos) {
               if (abortController.signal.aborted || foundVideos >= targetVideoCount) break;
@@ -983,9 +983,10 @@ export async function handleStreamSearch(
     let reasonIfPartial: string | undefined;
 
     if (totalFound < totalTarget) {
-      if (reviewAccessLimited) {
-        reasonIfPartial='أمازون قيّد الوصول لبعض صفحات الريفيوهات. هذا عدد الفيديوهات التي استطعنا الوصول إليها، وليس كل الفيديوهات الموجودة.';
-      } else if (pagesBlockedCount > 0 && totalProductsDiscovered === 0) {
+      if (reviewLimits.size) {
+        const counts=[targetVideoCount&&('فيديوهات '+foundVideos+'/'+targetVideoCount),targetPhotoCount&&('صور '+foundPhotos+'/'+targetPhotoCount)].filter(Boolean);
+        reasonIfPartial=[...reviewLimits].join(' ')+' '+counts.join('، ');
+      } else if (pagesBlockedCount > 0) {
         reasonIfPartial = 'أمازون حظر الطلب';
         sendEvent({
           type: 'warning',
@@ -1004,16 +1005,16 @@ export async function handleStreamSearch(
           timestamp: new Date().toISOString(),
         });
       } else if (totalFound === 0) {
-        reasonIfPartial = 'المنتجات لا تحتوي على فيديوهات';
+        reasonIfPartial = 'لم نعثر على وسائط مطابقة في الصفحات المقروءة';
         sendEvent({
           type: 'warning',
           searchId,
-          message: 'المنتجات لا تحتوي على فيديوهات',
+          message: 'لم نعثر على وسائط مطابقة في الصفحات المقروءة',
           code: 'NO_VIDEOS_IN_PRODUCTS',
           timestamp: new Date().toISOString(),
         });
       } else {
-        reasonIfPartial = 'تم استخراج جميع الفيديوهات المتاحة للمنتجات المطابقة';
+        reasonIfPartial = 'الوسائط المطابقة التي عُثر عليها في الصفحات المقروءة أقل من العدد المطلوب';
       }
     }
 
@@ -1158,7 +1159,7 @@ export async function handleDebugAmazon(req: Request, res: Response): Promise<vo
   const totalMs = Date.now() - tStart;
 
   if (sortedCandidates.length > 0 && totalVideosFound === 0) {
-    arabicReason = 'المنتجات لا تحتوي على فيديوهات';
+    arabicReason = 'لم نعثر على وسائط مطابقة في الصفحات المقروءة';
   }
 
   res.json({
