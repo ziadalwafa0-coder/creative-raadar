@@ -40,6 +40,7 @@ interface AppContextType {
     productUrl?: string;
     mediaType: Project['mediaTypeRequested'];
     sourcePlatform?: 'all' | 'amazon' | 'tiktok';
+    sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
     targetPhotoCount: number;
     referenceImage?: string | null;
@@ -209,6 +210,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     productUrl?: string;
     mediaType: Project['mediaTypeRequested'];
     sourcePlatform?: 'all' | 'amazon' | 'tiktok';
+    sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
     targetPhotoCount: number;
     referenceImage?: string | null;
@@ -265,6 +267,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : [],
       mediaTypeRequested: params.mediaType,
       verifiedExpansion: params.verifiedExpansion,
+      sourceVideoCounts: params.sourceVideoCounts,
       targetVideoCount: effectiveVideoTarget,
       targetPhotoCount: effectivePhotoTarget,
       settings: {
@@ -336,7 +339,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           productUrl: params.productUrl,
           mediaType: params.mediaType,
           sourcePlatform,
-          targetVideoCount: effectiveVideoTarget,
+          sourceVideoCounts: params.sourceVideoCounts,
+      targetVideoCount: effectiveVideoTarget,
           targetPhotoCount: effectivePhotoTarget,
           hasReferenceImage: Boolean(params.referenceImage),
           referenceImage: params.imageConfirmedLocally || effectiveExpansion ? undefined : params.referenceImage || undefined,
@@ -421,6 +425,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               contentDescription: isTikTokAsset
                 ? 'فيديو عام ظهر في نتائج البحث على TikTok'
                 : 'محتوى من مراجعات أمازون أمريكا',
+              reviewStars: a.reviewStars,
               sentiment: a.sentiment || 'neutral',
               downloadStatus: 'verified_available',
               collectedAt: a.collectedAt || new Date().toISOString(),

@@ -1,3 +1,4 @@
+import {reviewTone} from '../utils/reviewTone.ts';
 import React, { useState } from 'react';
 import { CandidateAsset } from '../types/index.ts';
 import { getProvenanceLabel } from '../utils/rules.ts';
@@ -34,6 +35,7 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
     (Boolean(asset.mediaUrl) &&
       !asset.mediaUrl?.includes('youtube.com') &&
       !asset.mediaUrl?.includes('youtu.be'));
+  const tone=reviewTone(asset.title,asset.reviewStars);
   const isFailed = asset.downloadStatus === 'download_failed';
 
   const handleRetryDownload = async (e: React.MouseEvent) => {
@@ -130,6 +132,7 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
             >
               {isTikTok ? 'تيك توك • TikTok' : 'أمازون • Amazon'}
             </span>
+            {isVideo && <span title={asset.reviewStars ? 'من نجوم مراجعة العميل' : 'تقدير من عنوان الفيديو أو وصفه'} className={'rounded-md px-2 py-0.5 text-[10px] font-semibold '+(tone==='إيجابي'?'bg-green-50 text-green-800':tone==='سلبي'?'bg-red-50 text-red-800':'bg-gray-100 text-gray-700')}>{tone}</span>}
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${provInfo.badge}`}>
               {provInfo.label}
             </span>
@@ -142,7 +145,8 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
             {asset.title}
           </h4>
 
-          {asset.productListingUrl && (
+          {isTikTok && <button onClick={()=>onPreview(asset)} className="text-xs text-[#247C72] underline">تشغيل فيديو تيك توك هنا</button>}
+          {!isTikTok && asset.productListingUrl && (
             <a
               href={asset.productListingUrl}
               target="_blank"
@@ -206,7 +210,7 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
               </button>
             )}
 
-            <a
+            {!isTikTok && <a
               href={asset.sourceUrl}
               target="_blank"
               rel="noopener noreferrer"
@@ -215,7 +219,7 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
             >
               <span>المصدر</span>
               <ExternalLink className="w-3.5 h-3.5" />
-            </a>
+            </a>}
           </div>
         </div>
       </div>

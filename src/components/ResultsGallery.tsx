@@ -18,6 +18,9 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
   const [isExportingZip, setIsExportingZip] = useState<boolean>(false);
 
   const candidates = project.candidates || [];
+  const [tab,setTab]=useState<'amazon'|'tiktok'>(project.settings?.sourcePriority?.[0]==='tiktok'?'tiktok':'amazon');
+  const showTabs=project.mediaTypeRequested!=='photo' && (project.sourceVideoCounts || (project.settings?.sourcePriority?.includes('amazon') && project.settings?.sourcePriority?.includes('tiktok')));
+  const visible=showTabs?candidates.filter(asset=>asset.platform===tab):candidates;
   const terminalMessage = ['completed_partial', 'failed'].includes(project.jobState)
     ? project.logs.at(-1)?.message
     : undefined;
@@ -192,10 +195,20 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
         </div>
       )}
 
+      {showTabs && <div role="group" aria-label="مصدر النتائج" className="flex gap-2">
+        {(['amazon','tiktok'] as const).map(source=>{
+          const count=candidates.filter(item=>item.platform===source&&item.mediaType==='video').length;
+          const quota=project.sourceVideoCounts?.[source];
+          return <button type="button" key={source} aria-pressed={source===tab} onClick={()=>setTab(source)}
+            className={'rounded-xl border px-4 py-2 text-sm '+(source===tab?'bg-[#247C72] text-white':'bg-white')}>
+            {source==='amazon'?'أمازون':'تيك توك'} ({count}{quota?' / '+quota:''})
+          </button>;
+        })}
+      </div>}
       {/* Results Grid */}
-      {candidates.length > 0 ? (
+      {visible.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {candidates.map((asset) => (
+          {visible.map((asset) => (
             <AssetCard
               key={asset.id}
               asset={asset}
@@ -212,7 +225,7 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
             {terminalMessage ? 'لم يتم جلب نتائج مطابقة' : 'لا توجد نتائج متاحة حتى الآن'}
           </h4>
           <p className="text-xs text-[#616764] max-w-sm mx-auto">
-            {terminalMessage || 'تظهر الفيديوهات والصور هنا فور اكتمال استخراجها، أو يمكنك فتح التفاصيل لإضافة رابط مباشر.'}
+            {showTabs ? 'لم تصل نتائج من هذا المصدر حتى الآن.' : terminalMessage || 'تظهر الفيديوهات والصور هنا فور اكتمال استخراجها، أو يمكنك فتح التفاصيل لإضافة رابط مباشر.'}
           </p>
         </div>
       )}

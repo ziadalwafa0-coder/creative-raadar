@@ -22,15 +22,8 @@ export const HomeSearchCard: React.FC = () => {
   const [productUrl, setProductUrl] = useState('');
   const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('video');
   const [platform,setPlatform]=useState<'amazon'|'tiktok'|'all'>('amazon');
-  const [tiktokConfigured,setTikTokConfigured]=useState<boolean|null>(null);
-  useEffect(()=>{
-    if(platform==='amazon')return;
-    const controller=new AbortController();
-    apiFetch('/api/tiktok/status',{signal:controller.signal}).then(response=>response.json()).then(data=>{
-      if(!controller.signal.aborted)setTikTokConfigured(data.configured===true);
-    }).catch(()=>{if(!controller.signal.aborted)setTikTokConfigured(false);});
-    return ()=>controller.abort();
-  },[platform]);
+  const [amazonInput,setAmazonInput]=useState('5');
+  const [tiktokInput,setTiktokInput]=useState('5');
   const [targetVideoInput, setTargetVideoInput] = useState<string>('10');
   const [targetPhotoInput, setTargetPhotoInput] = useState<string>('10');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -141,6 +134,10 @@ export const HomeSearchCard: React.FC = () => {
     return Math.max(1, Math.min(500, Math.floor(val)));
   };
 
+  const sourceVideoCounts=platform==='all'&&mediaType!=='photo'
+    ? {amazon:clampCount(amazonInput),tiktok:clampCount(tiktokInput)} : undefined;
+  const videoTarget=sourceVideoCounts?sourceVideoCounts.amazon+sourceVideoCounts.tiktok:clampCount(targetVideoInput);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedName = productName.trim();
@@ -160,9 +157,9 @@ export const HomeSearchCard: React.FC = () => {
     setIsSubmitting(true);
     cancelStreamingSearch();
 
-    const safeVideoCount = clampCount(targetVideoInput);
+    const safeVideoCount = videoTarget;
     const safePhotoCount = clampCount(targetPhotoInput);
-    setTargetVideoInput(String(safeVideoCount));
+    if(!sourceVideoCounts)setTargetVideoInput(String(safeVideoCount));
     setTargetPhotoInput(String(safePhotoCount));
 
     const effectiveName = trimmedName || trimmedUrl || (imagePreview ? 'بحث بالصورة' : '');
@@ -237,7 +234,7 @@ export const HomeSearchCard: React.FC = () => {
         productName: effectiveName,
         productUrl: selectedUrl || undefined,
         mediaType,
-        sourcePlatform: platform,
+        sourcePlatform: platform, sourceVideoCounts,
         targetVideoCount: safeVideoCount,
         targetPhotoCount: safePhotoCount,
         referenceImage: imagePreview,
@@ -370,7 +367,7 @@ export const HomeSearchCard: React.FC = () => {
                   setIsSubmitting(true); setValidationError(null);
                   try {
                     await startStreamingSearch({ productName: productName.trim() || commercialName, productUrl: candidate.url,
-                      mediaType, sourcePlatform: platform, targetVideoCount: clampCount(targetVideoInput), targetPhotoCount: clampCount(targetPhotoInput),
+                      mediaType, sourcePlatform: platform, sourceVideoCounts, targetVideoCount: videoTarget, targetPhotoCount: clampCount(targetPhotoInput),
                       referenceImage: imagePreview, imageConfirmedLocally: true,
                       verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:commercialName.trim(),profile:cloudProfileRef.current} : undefined });
                   } catch (error) { setValidationError(error instanceof Error ? error.message : 'تعذر بدء البحث.'); }
@@ -455,8 +452,6 @@ export const HomeSearchCard: React.FC = () => {
             if(next==='tiktok')setMediaType('video');
           }}><option value="amazon">Amazon · ريفيوهات العملاء</option><option value="tiktok">TikTok · فيديوهات المنتجات</option><option value="all">Amazon + TikTok</option></select>
         </label>
-        {platform==='all'&&<p className="text-sm text-[#616764]">عدد الفيديوهات إجمالي للمصدرين. نبدأ بنصف العدد من أمازون ونطلب الباقي من TikTok. الصور من ريفيوهات أمازون.</p>}
-        {platform!=='amazon'&&tiktokConfigured===false&&<p className="text-sm text-[#616764]">مصدر TikTok يحتاج إعدادًا من صاحب الموقع. البحث المجاني المباشر محدود حاليًا.</p>}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
             نوع النتائج
@@ -508,7 +503,17 @@ export const HomeSearchCard: React.FC = () => {
             mediaType === 'both' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'
           }`}
         >
-          {(mediaType === 'video' || mediaType === 'both') && (
+          {sourceVideoCounts && (['amazon','tiktok'] as const).map(source=>{
+            const amazon=source==='amazon';
+            const value=amazon?amazonInput:tiktokInput;
+            const update=amazon?setAmazonInput:setTiktokInput;
+            return <label key={source} className="block text-sm font-semibold">
+              {amazon?'عدد فيديوهات أمازون':'عدد فيديوهات تيك توك'}
+              <input type="number" min={1} max={500} value={value} onChange={e=>update(e.target.value)}
+                onBlur={()=>update(String(clampCount(value)))} className="mt-2 w-full h-11 px-4 rounded-xl border bg-[#FAFBF9]" />
+            </label>;
+          })}
+          {!sourceVideoCounts && (mediaType === 'video' || mediaType === 'both') && (
             <div>
               <label
                 htmlFor="target-video-count"

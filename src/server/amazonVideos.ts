@@ -12,6 +12,7 @@ import {
 import { extractAsinFromUrl } from './queryBuilder.ts';
 
 export interface ExtractedAmazonVideo {
+  reviewStars?: number;
   title: string;
   mediaUrl: string;
   downloadUrl: string;
@@ -198,6 +199,7 @@ export function parseAmazonUsVideosFromHtml(
 
   const pushCandidate = (item: {
     videoUrl: string;
+    reviewStars?: number;
     title?: string;
     reviewer?: string;
     thumb?: string;
@@ -254,6 +256,7 @@ export function parseAmazonUsVideosFromHtml(
 
     results.push({
       title: cleanTitle,
+      reviewStars:item.reviewStars,
       mediaUrl: rawUrl,
       downloadUrl: rawUrl,
       thumbnailUrl: item.thumb ? decodeEntities(item.thumb) : undefined,
@@ -328,6 +331,7 @@ export function parseAmazonUsVideosFromHtml(
     for (const um of urlMatches) {
       pushCandidate({
         videoUrl: um[1],
+        reviewStars: Number(block.match(/data-hook="(?:review-star-rating|cmps-review-star-rating)"[^>]*>[\s\S]{0,180}?([1-5])(?:\.0)? out of 5/i)?.[1]) || undefined,
         title: titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : 'مراجعة فيديو من مشتري',
         reviewer: profileMatch ? profileMatch[1].replace(/<[^>]+>/g, '').trim() : 'عميل أمازون',
         thumb: thumbMatch ? thumbMatch[1] : undefined,

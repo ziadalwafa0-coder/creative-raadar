@@ -13,6 +13,8 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
   const { lang, downloadWithSession, sessionId } = useApp();
   const [isDownloading, setIsDownloading] = useState(false);
 
+  const [failedSrc,setFailedSrc]=useState<string>();
+
   if (!asset) return null;
 
   const provInfo = getProvenanceLabel(asset.provenance, lang);
@@ -87,6 +89,8 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
             {isVideo ? (
               <video
                 key={streamPreviewSrc}
+                onError={()=>setFailedSrc(streamPreviewSrc)}
+                onLoadedMetadata={()=>setFailedSrc(undefined)}
                 preload="metadata"
                 src={streamPreviewSrc}
                 poster={asset.thumbnailUrl}
@@ -106,6 +110,7 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
             )}
           </div>
 
+          {failedSrc && failedSrc===streamPreviewSrc && <p role="alert" className="text-sm text-red-700">تعذّر تحميل الملف للمعاينة. لو الرابط انتهت صلاحيته، حدّث البحث لجلب رابط جديد.</p>}
           {/* Actions Bar */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
             <div className="flex items-center gap-2">
@@ -130,7 +135,7 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 py-2 px-3.5 rounded-xl border border-[#E2E5DF] hover:bg-[#F6F7F4] text-[#181B1A] text-xs font-semibold transition-colors"
               >
-                <span>فتح المصدر</span>
+                <span>{asset.platform==='tiktok'?'المنشور الأصلي على تيك توك (خارجي)':'فتح المصدر'}</span>
                 <ExternalLink className="w-3.5 h-3.5 text-[#616764]" />
               </a>
 

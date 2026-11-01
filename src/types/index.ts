@@ -106,6 +106,7 @@ export interface CandidateAsset {
   supportingObservations: string[];
   unknowns: string[];
   contentDescription: string;
+  reviewStars?:number;
   sentiment?: 'positive' | 'mixed' | 'negative' | 'neutral';
   durationSeconds?: number;
   dimensions?: { width: number; height: number };
@@ -146,7 +147,8 @@ export interface Project {
     fileName: string;
   }[];
   mediaTypeRequested: MediaType;
-  targetVideoCount: number;
+  sourceVideoCounts?: { amazon:number; tiktok:number };
+    targetVideoCount: number;
   targetPhotoCount: number;
   userNotes?: string;
   productListingUrl?: string;

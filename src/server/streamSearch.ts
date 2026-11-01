@@ -59,6 +59,7 @@ export interface EphemeralAsset {
   platform?: SourcePlatform;
   durationSeconds?: number;
   provenance: string;
+  reviewStars?:number;
   sentiment: 'positive' | 'neutral' | 'negative';
   matchCategory: 'exact_design' | 'permitted_variation';
   matchScore: number;
@@ -316,6 +317,10 @@ export function isAllowedDownloadHost(rawUrl: string): boolean {
     const parsed = new URL(rawUrl);
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
     const host = parsed.hostname.toLowerCase();
+    if(parsed.protocol==='https:' && !parsed.username && !parsed.password && !parsed.port){
+      if(host==='api.apify.com')return /^\/v2\/key-value-stores\/[\w-]+\/records\/[\w.-]+\.mp4$/.test(parsed.pathname) && !parsed.search;
+      if(host==='www.tikwm.com'||host==='tikwm.com')return /^\/video\/media\/(?:play|wmplay)\/\d+\.mp4$/.test(parsed.pathname);
+    }
     return ALLOWED_DOWNLOAD_HOST_SUFFIXES.some(
       (suffix) => host === suffix || host.endsWith(`.${suffix}`)
     );
@@ -778,7 +783,8 @@ export async function handleStreamSearch(
         mediaType: 'video',
         platform: 'amazon',
         provenance: v.provenance || 'unverified_customer_review',
-        sentiment: 'positive',
+        reviewStars:v.reviewStars,
+        sentiment: v.reviewStars && v.reviewStars>=4?'positive':v.reviewStars && v.reviewStars<=2?'negative':'neutral',
         matchCategory:
           titleVerdict.matchCategory === 'mismatched' ? 'exact_design' : titleVerdict.matchCategory,
         matchScore: titleVerdict.matchScore,

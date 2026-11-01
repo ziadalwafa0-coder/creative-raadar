@@ -40,3 +40,18 @@ test('Amazon fills an unavailable TikTok share without counting replayed videos'
   assert.equal(new Set(events.filter(event=>event.asset).map(event=>event.asset.mediaUrl)).size,10);
   assert.equal(events.at(-1).foundCount,10);
 });
+
+test('explicit quotas keep a short Amazon result separate from the requested TikTok count',async()=>{
+  const calls: number[]=[];
+  const response=combinedSearch({method:'POST',body:JSON.stringify({...body,sourceVideoCounts:{amazon:7,tiktok:3}})},async(_url,init)=>{
+    const req=JSON.parse(String(init?.body));
+    calls.push(req.targetVideoCount);
+    const count=req.sourcePlatform==='amazon'?2:9;
+    return new Response(Array.from({length:count},(_,i)=>JSON.stringify({type:'result',asset:{
+      mediaType:'video',mediaUrl:'https://example.com/'+req.sourcePlatform+i+'.mp4'
+    }})).join('\n'));
+  });
+  const events=(await response.text()).trim().split('\n').map(line=>JSON.parse(line));
+  assert.deepEqual(calls,[7,3]);
+  assert.equal(events.at(-1).foundCount,5);
+});

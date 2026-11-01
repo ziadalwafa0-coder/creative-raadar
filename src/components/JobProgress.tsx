@@ -94,7 +94,8 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
         productUrl: project.productListingUrl,
         mediaType: project.mediaTypeRequested,
         sourcePlatform: resolvedSourcePlatform,
-        targetVideoCount: parsedVid,
+        sourceVideoCounts: project.sourceVideoCounts,
+        targetVideoCount: project.sourceVideoCounts ? project.sourceVideoCounts.amazon + project.sourceVideoCounts.tiktok : parsedVid,
         targetPhotoCount: parsedPh,
         referenceImage: project.referenceImages?.[0]?.url,
         imageConfirmedLocally: Boolean(project.verifiedExpansion),
@@ -337,9 +338,9 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
                     type="number"
                     min={1}
                     max={500}
-                    value={videoTargetInput}
+                    value={project.sourceVideoCounts ? project.targetVideoCount : videoTargetInput}
                     onChange={(e) => setVideoTargetInput(e.target.value)}
-                    disabled={isRunning}
+                    disabled={isRunning || Boolean(project.sourceVideoCounts)}
                     className="w-16 h-7 px-2 rounded-lg bg-white border border-[#E2E5DF] text-xs font-semibold text-[#181B1A]"
                   />
                 </label>

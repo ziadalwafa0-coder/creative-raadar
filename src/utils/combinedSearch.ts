@@ -3,7 +3,9 @@ type Fetcher = (input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
 /** Merge two server streams into the single active UI search. */
 export function combinedSearch(init:RequestInit,request:Fetcher):Response {
   const parent=JSON.parse(String(init.body));
-  const target=Math.min(500,Math.max(1,Math.floor(Number(parent.targetVideoCount)||10)));
+  const quotas=parent.sourceVideoCounts;
+  const explicit=quotas && [quotas.amazon,quotas.tiktok].every(n=>Number.isInteger(n)&&n>=1&&n<=500);
+  const target=explicit?quotas.amazon+quotas.tiktok:Math.min(500,Math.max(1,Math.floor(Number(parent.targetVideoCount)||10)));
   const controller=new AbortController();
   const signal=init.signal?AbortSignal.any([init.signal,controller.signal]):controller.signal;
   const stream=new ReadableStream<Uint8Array>({
@@ -24,15 +26,17 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
           targetPhotoCount:source==='amazon'?parent.targetPhotoCount:0})});
         if(!response.ok||!response.body)throw Error(source+': تعذّر بدء البحث');
         const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
+        let sourceVideos=0;
         const process=(line:string)=>{
           if(!line.trim())return;
           const event=JSON.parse(line);
           if(event.type==='result'&&event.asset){
             const asset=event.asset;
             const key=asset.mediaType+':'+(asset.mediaType==='video'?(asset.reviewId||(source==='tiktok'&&asset.sourceUrl)||asset.mediaUrl):asset.mediaUrl);
+            if(asset.mediaType==='video'&&sourceVideos>=count)return;
             if(!asset.mediaUrl||seen.has(key)||(asset.mediaType==='video'?found>=target:photos>=Number(parent.targetPhotoCount||0)))return;
             seen.add(key);
-            if(asset.mediaType==='video')found++;else photos++;
+            if(asset.mediaType==='video'){found++;sourceVideos++;}else photos++;
             send({...event,asset:{...asset,searchId:parent.searchId}});
           }else if(event.type==='warning'||event.type==='progress')send(event);
           else if(event.type==='failed'){
@@ -49,7 +53,7 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
         }finally{await reader.cancel().catch(()=>{});}
       };
       void(async()=>{
-        const amazonShare=Math.ceil(target/2);
+        const amazonShare=explicit?quotas.amazon:Math.ceil(target/2);
         const collect=async(source:'amazon'|'tiktok',count:number)=>{
           signal.throwIfAborted();
           try{await read(source,count);}catch(error){
@@ -60,9 +64,9 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
         };
         await collect('amazon',amazonShare);
         const amazonFilledShare=found===amazonShare;
-        if(found<target)await collect('tiktok',target-found);
+        if(found<target)await collect('tiktok',explicit?quotas.tiktok:target-found);
         // Amazon starts at the first result again. Ask for the full quota and deduplicate the replay.
-        if(found<target&&amazonFilledShare)await collect('amazon',target);
+        if(!explicit&&found<target&&amazonFilledShare)await collect('amazon',target);
         send({type:'completed',requestedCount:target,foundCount:found+photos,downloadableCount:found+photos,
           reasonIfPartial:found<target?warnings.join(' · ')||'النتائج المتاحة أقل من العدد المطلوب.':undefined});
       })().catch(error=>{if(!signal.aborted)send({type:'failed',error:error.message});}).finally(()=>{try{writer.close();}catch{}});
