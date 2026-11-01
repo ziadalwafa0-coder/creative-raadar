@@ -1,3 +1,4 @@
+import {recoverTikTokStream} from '../utils/recoverTikTokStream.ts';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {combinedSearch} from '../utils/combinedSearch.ts';
 import { Language, translations } from '../translations/index.ts';
@@ -182,9 +183,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers,
       credentials: 'same-origin',
     };
-    const res=input==='/api/stream-search'&&init?.body&&JSON.parse(String(init.body)).sourcePlatform==='all'&&JSON.parse(String(init.body)).mediaType!=='photo'
-      ? combinedSearch(options,(url,settings)=>fetch(url,settings))
-      : await fetch(input,options);
+    const fetchStream=async(url:RequestInfo|URL,settings:RequestInit={})=>{
+      const response=await fetch(url,settings);
+      const body=settings.body && JSON.parse(String(settings.body));
+      return body?.sourcePlatform==='tiktok'?recoverTikTokStream(response,settings):response;
+    };
+    const streaming=input==='/api/stream-search' && Boolean(options.body);
+    const body=streaming?JSON.parse(String(options.body)):null;
+    const res=body?.sourcePlatform==='all' && body.mediaType!=='photo'
+      ? combinedSearch(options,fetchStream)
+      : streaming ? await fetchStream(input,options) : await fetch(input,options);
     if (res.status === 401) {
       const urlStr = typeof input === 'string' ? input : input.toString();
       if (!urlStr.includes('/api/auth/login') && !urlStr.includes('/api/auth/session')) {

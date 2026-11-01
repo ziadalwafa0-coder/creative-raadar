@@ -389,7 +389,7 @@ export async function fetchAmazonUsProductVideos(
       : Promise.resolve(''),
   ]);
 
-  if (!dpHtml && !reviewsHtml && blockError) throw blockError;
+  if (!dpHtml && !reviewsHtml && blockError && !(cached && cached.expiresAt>now && cached.videos.length)) throw blockError;
 
   const fromDp = dpHtml ? parseAmazonUsVideosFromHtml(dpHtml, dpUrl) : [];
   const fromReviews = reviewsHtml && reviewsMediaUrl ? parseAmazonUsVideosFromHtml(reviewsHtml, dpUrl) : [];
@@ -428,9 +428,8 @@ export async function fetchAmazonUsProductVideos(
     try {
       html = await fetchHtml(next,{signal,timeoutMs:8000,minHtmlChars:2500,referer:dpUrl});
       const videos = parseAmazonUsVideosFromHtml(html,dpUrl);
-      const before = mergedByUuid.size;
       for (const video of videos) if (!mergedByUuid.has(video.streamUuid)) mergedByUuid.set(video.streamUuid,video);
-      if (before === mergedByUuid.size) { options.onLimited?.('لم تظهر فيديوهات جديدة في الصفحة التالية'); break; }
+      // Image-only and duplicate-only pages may still link to more video reviews.
       await deliver(); exhausted=!nextAmazonReviewPage(html,dpUrl,asin);
     } catch (error) { signal?.throwIfAborted(); options.onLimited?.(error instanceof Error ? error.message : 'تعذر فتح صفحة الريفيوهات التالية'); break; }
   }
