@@ -29,8 +29,8 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
           const event=JSON.parse(line);
           if(event.type==='result'&&event.asset){
             const asset=event.asset;
-            const key=asset.reviewId||asset.mediaUrl;
-            if(!key||seen.has(key)||asset.mediaType==='video'&&found>=target)return;
+            const key=asset.mediaType+':'+(asset.mediaType==='video'?(asset.reviewId||asset.sourceUrl||asset.mediaUrl):asset.mediaUrl);
+            if(!asset.mediaUrl||seen.has(key)||(asset.mediaType==='video'?found>=target:photos>=Number(parent.targetPhotoCount||0)))return;
             seen.add(key);
             if(asset.mediaType==='video')found++;else photos++;
             send({...event,asset:{...asset,searchId:parent.searchId}});
@@ -49,13 +49,20 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
         }finally{await reader.cancel().catch(()=>{});}
       };
       void(async()=>{
-        for(const [source,count] of [['amazon',Math.ceil(target/2)],['tiktok',Math.max(1,target-Math.ceil(target/2))]] as const){
+        const amazonShare=Math.ceil(target/2);
+        const collect=async(source:'amazon'|'tiktok',count:number)=>{
           signal.throwIfAborted();
-          try{await read(source,source==='tiktok'?Math.max(1,target-found):count);}catch(error){
-            signal.throwIfAborted();const message=source+': '+(error instanceof Error?error.message:'تعذّر الجلب');
+          try{await read(source,count);}catch(error){
+            signal.throwIfAborted();
+            const message=source+': '+(error instanceof Error?error.message:'تعذّر الجلب');
             warnings.push(message);send({type:'warning',message});
           }
-        }
+        };
+        await collect('amazon',amazonShare);
+        const amazonFilledShare=found===amazonShare;
+        if(found<target)await collect('tiktok',target-found);
+        // Amazon starts at the first result again. Ask for the full quota and deduplicate the replay.
+        if(found<target&&amazonFilledShare)await collect('amazon',target);
         send({type:'completed',requestedCount:target,foundCount:found+photos,downloadableCount:found+photos,
           reasonIfPartial:found<target?warnings.join(' · ')||'النتائج المتاحة أقل من العدد المطلوب.':undefined});
       })().catch(error=>{if(!signal.aborted)send({type:'failed',error:error.message});}).finally(()=>{try{writer.close();}catch{}});

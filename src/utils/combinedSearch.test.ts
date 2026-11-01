@@ -27,3 +27,16 @@ test('a TikTok failure preserves Amazon results and reports a partial result',as
   assert.equal(events.at(-1).foundCount,1);
   assert.match(events.at(-1).reasonIfPartial,/TikTok unavailable/);
 });
+
+test('Amazon fills an unavailable TikTok share without counting replayed videos',async()=>{
+  const response=combinedSearch({method:'POST',body:JSON.stringify(body)},async(_url,init)=>{
+    const req=JSON.parse(String(init?.body));
+    const events=req.sourcePlatform==='tiktok'?[]:Array.from({length:req.targetVideoCount},(_,i)=>({
+      type:'result',asset:{mediaType:'video',mediaUrl:'https://example.com/'+i+'.mp4'}
+    }));
+    return new Response(events.map(event=>JSON.stringify(event)).join('\n'));
+  });
+  const events=(await response.text()).trim().split('\n').map(line=>JSON.parse(line));
+  assert.equal(new Set(events.filter(event=>event.asset).map(event=>event.asset.mediaUrl)).size,10);
+  assert.equal(events.at(-1).foundCount,10);
+});
