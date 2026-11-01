@@ -1,7 +1,7 @@
 export function parseFreeTikTokVideos(data:unknown,limit:number){
   const rows=(data as any)?.data?.videos;
   if((data as any)?.code!==0||!Array.isArray(rows))throw Error('مصدر TikTok المجاني لم يُتح نتائج البحث.');
-  const videos:Array<{url:string;source:string;title:string;author:string}>=[];
+  const videos:Array<{url:string;source:string;title:string;author:string;thumbnailUrl?:string}>=[];
   const seen=new Set<string>();
   for(const row of rows){
     const id=String(row.video_id||'');
@@ -12,7 +12,7 @@ export function parseFreeTikTokVideos(data:unknown,limit:number){
     const trusted=media.hostname==='www.tikwm.com'||media.hostname==='tikwm.com'||/^(?:[^.]+\.)*tiktokcdn(?:-us|-eu)?\.com$/.test(media.hostname)||/^(?:[^.]+\.)*tiktokv\.com$/.test(media.hostname);
     if(!trusted||media.protocol!=='https:'||media.username||media.password||media.port)continue;
     seen.add(id);
-    videos.push({url:media.href,source:'https://www.tiktok.com/@'+author+'/video/'+id,title:String(row.title||'فيديو TikTok').slice(0,500),author});
+    videos.push({thumbnailUrl:row.origin_cover||row.cover||undefined,url:media.href,source:'https://www.tiktok.com/@'+author+'/video/'+id,title:String(row.title||'فيديو TikTok').slice(0,500),author});
     if(videos.length>=limit)break;
   }
   return videos;

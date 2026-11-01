@@ -1,3 +1,4 @@
+import {VideoFrame} from './VideoFrame.tsx';
 import {reviewTone} from '../utils/reviewTone.ts';
 import React, { useState } from 'react';
 import { CandidateAsset } from '../types/index.ts';
@@ -94,7 +95,7 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
             className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
             loading="lazy"
           />
-        ) : (
+        ) : isVideo ? <VideoFrame asset={asset}/> : (
           <div className="w-full h-full flex flex-col items-center justify-center bg-[#202422] text-slate-300 p-4 text-center select-none">
             <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-[#56B3A8] mb-2">
               {isVideo ? <Video className="w-5 h-5" /> : <Camera className="w-5 h-5" />}

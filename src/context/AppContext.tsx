@@ -326,19 +326,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('search');
 
     try {
-      let effectiveExpansion = params.verifiedExpansion;
-      if (!effectiveExpansion && params.productUrl && params.referenceImage) {
-        // Refreshing a result created before the expansion fix must upgrade too.
-        try {
-          const referenceImage = await prepareIdentityImage(params.referenceImage);
-          const identity = await analyzeImageWithGemini(referenceImage, params.productName, abortController.signal, apiFetch);
-          if (identity.profile.confidence !== 'low') {
-            effectiveExpansion = {referenceImage,query:identity.query,profile:identity.profile};
-            const expansion = effectiveExpansion;
-            setCurrentProject(previous => previous?.id === projectId ? {...previous,verifiedExpansion:expansion} : previous);
-          }
-        } catch { abortController.signal.throwIfAborted(); }
-      }
+      const effectiveExpansion=params.verifiedExpansion;
+      const matchImage=sourcePlatform!=='amazon' && params.referenceImage
+        ? await prepareIdentityImage(params.referenceImage) : undefined;
       const res = await apiFetch('/api/stream-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -353,6 +343,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sourceVideoCounts: params.sourceVideoCounts,
       targetVideoCount: effectiveVideoTarget,
           targetPhotoCount: effectivePhotoTarget,
+          matchImage,selectedProductUrl:params.productUrl,
           hasReferenceImage: Boolean(params.referenceImage),
           referenceImage: params.imageConfirmedLocally || effectiveExpansion ? undefined : params.referenceImage || undefined,
           verifiedExpansion: effectiveExpansion,

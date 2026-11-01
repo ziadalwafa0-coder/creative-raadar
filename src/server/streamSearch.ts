@@ -41,7 +41,7 @@ import {
 import { DATA_DIR } from './config.ts';
 import { downloadMedia, prewarmMediaInBackground, DOWNLOADS_DIR } from './downloader.ts';
 import { analyzeProductImage, isGeminiConfigured } from './gemini.ts';
-import {collectVerifiedListings} from './verifiedCollection.ts';
+import {filterTikTokProducts} from './tiktokMatch.ts';
 import {searchPublicTikTok} from './tiktokSearch.ts';
 
 export interface EphemeralAsset {
@@ -552,13 +552,14 @@ export async function handleStreamSearch(
   try {
     if(req.body.sourcePlatform==='tiktok'){
       if(mediaType!=='video')throw Error('بحث TikTok يدعم الفيديوهات فقط.');
-      const items=await searchPublicTikTok(rawProductName,targetVideoCount,abortController.signal);
+      const pool=await searchPublicTikTok(rawProductName,Math.min(500,targetVideoCount+6),abortController.signal);
+      const items=await filterTikTokProducts(pool,req.body,targetVideoCount,abortController.signal);
       for(const item of items){
         const timestamp=new Date().toISOString();
         sendEvent({type:'result',searchId,timestamp,asset:{id:'tt-'+searchId+'-'+(++foundVideos),searchId,
-          mediaType:'video',platform:'tiktok',title:item.title,mediaUrl:item.url,downloadUrl:item.url,sourceUrl:item.source,
+          mediaType:'video',platform:'tiktok',title:item.title,thumbnailUrl:item.thumbnailUrl,mediaUrl:item.url,downloadUrl:item.url,sourceUrl:item.source,
           productListingUrl:item.source,reviewerOrChannel:item.author,provenance:'unresolved_source',isCustomerReview:false,
-          matchCategory:'permitted_variation',matchScore:0,userFacingMatchLabel:'نتيجة بحث بالاسم',sentiment:'neutral',collectedAt:timestamp}});
+          matchCategory:'permitted_variation',matchScore:0,userFacingMatchLabel:req.body.matchImage||req.body.selectedProductUrl?'تطابق بصري مع صورة المنتج':'مطابقة وصف الفيديو',sentiment:'neutral',collectedAt:timestamp}});
       }
       sendEvent({type:'completed',searchId,timestamp:new Date().toISOString(),requestedCount:targetVideoCount,foundCount:foundVideos,
         downloadableCount:foundVideos,reasonIfPartial:foundVideos<targetVideoCount?'نتائج TikTok المتاحة أقل من المطلوب.':undefined});
@@ -626,10 +627,7 @@ export async function handleStreamSearch(
 
     if (abortController.signal.aborted) return;
 
-    const verifiedExpansion = req.body?.verifiedExpansion || (rawReferenceImage && resolvedImageProfile
-      ? {referenceImage:rawReferenceImage,query:resolvedImageProfile.commercialNameEn || resolvedImageProfile.suggestedNameEn,profile:resolvedImageProfile}
-      : undefined);
-
+    if(rawProductUrl && !resolvedLinkIdentity?.directAmazonUsUrl)throw Error('تعذر تأكيد رابط المنتج المحدد على أمازون.');
     const searchProductName =
       resolvedLinkIdentity?.canonicalSearchQuery ||
       userTypedNonUrlName ||
@@ -665,9 +663,7 @@ export async function handleStreamSearch(
       type: 'progress',
       searchId,
       message: resolvedLinkIdentity?.directAmazonUsUrl
-        ? verifiedExpansion
-          ? 'نبدأ من صفحة المنتج المحددة، ثم نستكمل العدد من قوائم اجتازت مقارنة نفس التصميم بالصورة.'
-          : 'تم تحديد صفحة المنتج؛ نجمع مراجعات هذه الصفحة فقط دون التوسع لمنتجات أخرى.'
+        ? 'تم تحديد صفحة المنتج؛ نجمع مراجعات هذه الصفحة فقط.'
         : `جاري البحث في أمازون أمريكا عن: "${finalQueries.primaryQuery}" مع إعطاء دقة التطابق الأولوية...`,
       foundCount: 0,
       resolvedProductName: displayArabicName,
@@ -775,7 +771,7 @@ export async function handleStreamSearch(
         title: v.title || page.title,
         mediaUrl: v.mediaUrl,
         downloadUrl: bestDownloadUrl,
-        thumbnailUrl: v.thumbnailUrl || page.imageUrl,
+        thumbnailUrl: v.thumbnailUrl,
         sourceUrl: v.sourceUrl || page.url,
         productListingUrl: page.url,
         reviewerOrChannel: v.reviewerOrChannel || 'عميل أمازون',
@@ -914,21 +910,7 @@ export async function handleStreamSearch(
 
     const runProducer = async () => {
       try {
-        if (resolvedLinkIdentity?.directAmazonUsUrl && verifiedExpansion) {
-          for await (const matches of collectVerifiedListings(verifiedExpansion,rawProductName,seenAsins,abortController.signal,message=>{
-            sendEvent({type:'progress',searchId,message,foundCount:foundVideos+foundPhotos,timestamp:new Date().toISOString()});
-          },isGoalReached)) {
-            if (isGoalReached() || abortController.signal.aborted) break;
-            for (const {page,verdict} of matches) {
-              if (seenAsins.has(page.asin)) continue;
-              seenAsins.add(page.asin); totalProductsDiscovered++;
-              workQueue.push({page,titleVerdict:{...verdict,matchCategory:'permitted_variation',userFacingLabelAr:'تطابق بصري للتصميم؛ الماركة والموديل غير مؤكدين'}});
-            }
-            workQueue.sort((a,b)=>b.page.ratingCount-a.page.ratingCount);
-            notifyQueueListeners();
-          }
-          return;
-        }
+        if(resolvedLinkIdentity?.directAmazonUsUrl)return;
         await Promise.all(
           topVariants.map(async (qVariant) => {
             if (abortController.signal.aborted || isGoalReached()) return;
@@ -1990,7 +1972,7 @@ export class JobWorker {
             productListingUrl: page.url,
             reviewerOrChannel: v.reviewerOrChannel,
             reviewId: v.reviewId,
-            thumbnailUrl: v.thumbnailUrl || page.imageUrl || '',
+            thumbnailUrl: v.thumbnailUrl || '',
             mediaUrl: v.mediaUrl,
             downloadUrl: v.downloadUrl || v.mediaUrl,
             provenance: v.provenance,

@@ -1,3 +1,4 @@
+import {filterTikTokProducts} from './src/server/tiktokMatch.ts';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
@@ -304,6 +305,16 @@ app.post('/api/product-identity/candidates', requireAuth, (req: Request, res: Re
   });
 });
 
+app.post('/api/tiktok/matches',requireAuth,async(req,res)=>{
+  const rows=req.body?.items;
+  if(!Array.isArray(rows)||rows.length>10||rows.some(row=>!row||typeof row.title!=='string'||typeof row.source!=='string')){res.sendStatus(400);return;}
+  const controller=new AbortController();
+  res.on('close',()=>{if(!res.writableEnded)controller.abort();});
+  try{
+    const matched=await filterTikTokProducts(rows,req.body,rows.length,AbortSignal.any([controller.signal,AbortSignal.timeout(45000)]));
+    if(!controller.signal.aborted)res.json({sources:matched.map(row=>row.source)});
+  }catch{if(!controller.signal.aborted)res.status(503).json({sources:[]});}
+});
 app.get('/api/tiktok/status', requireAuth, (_req: Request, res: Response) => {
   res.json({configured:Boolean(process.env.APIFY_API_TOKEN?.trim())});
 });

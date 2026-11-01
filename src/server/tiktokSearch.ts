@@ -11,7 +11,7 @@ export async function searchPublicTikTok(query:string,limit:number,signal:AbortS
   const response=await fetch(url,{signal:AbortSignal.any([signal,AbortSignal.timeout(12000)]),headers:{Accept:'application/json'}});
   const data=response.ok?await response.json().catch(()=>null):null;
   if(!data||data.status_code!==0||!Array.isArray(data.data))throw Error('TikTok لم يُتح نتائج البحث من السيرفر حاليًا.');
-  const items:Array<{url:string;source:string;title:string;author:string}>=[];
+  const items:Array<{url:string;source:string;title:string;author:string;thumbnailUrl?:string}>=[];
   const seen=new Set<string>();
   for(const row of data.data){
     const item=row?.item;
@@ -21,7 +21,7 @@ export async function searchPublicTikTok(query:string,limit:number,signal:AbortS
     let media:URL;try{media=new URL(address);}catch{continue;}
     if(media.protocol!=='https:'||media.username||media.password||media.port||!/(^|\.)(tiktokcdn\.com|tiktokcdn-us\.com|tiktokv\.com)$/.test(media.hostname))continue;
     seen.add(item.id);
-    items.push({url:media.href,source:'https://www.tiktok.com/@'+item.author.uniqueId+'/video/'+item.id,title:String(item.desc||query).slice(0,500),author:item.author.uniqueId});
+    items.push({thumbnailUrl:typeof item.video?.cover==="string"?item.video.cover:item.video?.cover?.urlList?.[0],url:media.href,source:'https://www.tiktok.com/@'+item.author.uniqueId+'/video/'+item.id,title:String(item.desc||query).slice(0,500),author:item.author.uniqueId});
     if(items.length>=limit)break;
   }
   return items;

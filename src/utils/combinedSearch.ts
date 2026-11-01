@@ -16,7 +16,9 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
         if(!signal.aborted)writer.enqueue(new TextEncoder().encode(JSON.stringify({...event,searchId:parent.searchId})+'\n'));
       };
       const read=async(source:'amazon'|'tiktok',count:number)=>{
-        const query=source==='tiktok'?parent.verifiedExpansion?.query||parent.productName:parent.productName;
+        const selectedName=parent.productUrl && parent.productName?.match(/[a-z]{3}/i)
+          ? parent.productName.split(/[,|]/)[0].split(/\s+/).slice(0,12).join(' ') : '';
+        const query=source==='tiktok'?selectedName||parent.verifiedExpansion?.query||parent.productName:parent.productName;
         const response=await request('/api/stream-search',{...init,signal,body:JSON.stringify({...parent,
           searchId:crypto.randomUUID(),sourcePlatform:source,productName:query,
           productUrl:source==='amazon'?parent.productUrl:undefined,

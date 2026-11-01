@@ -326,7 +326,7 @@ export function parseAmazonUsVideosFromHtml(
       block.match(/data-hook="review-title"[^>]*>[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i) ||
       block.match(/class="[^"]*review-title[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
     const profileMatch = block.match(/class="a-profile-name"[^>]*>([\s\S]*?)<\/span>/i);
-    const thumbMatch = block.match(/(https?:\/\/m\.media-amazon\.com\/images\/I\/[^"'\s\\]+\.jpg)/i);
+    const thumbMatch = block.match(/<video\b[^>]*\bposter="(https:\/\/[^"]+)"/i);
 
     for (const um of urlMatches) {
       pushCandidate({

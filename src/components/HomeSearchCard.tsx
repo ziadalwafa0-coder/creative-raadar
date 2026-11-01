@@ -166,11 +166,13 @@ export const HomeSearchCard: React.FC = () => {
 
     try {
       let selectedUrl = trimmedUrl;
+      let selectedImage=imagePreview;
+      let selectedTitle=effectiveName;
       if(platform==='tiktok'){
         if(isScanning)throw Error('انتظر اكتمال قراءة الصورة.');
         const query=commercialName.trim()||trimmedName;
         if(!query)throw Error('اكتب اسم المنتج للبحث على TikTok.');
-        await startStreamingSearch({productName:query,mediaType:'video',sourcePlatform:'tiktok',targetVideoCount:safeVideoCount,targetPhotoCount:0});
+        await startStreamingSearch({referenceImage:imagePreview,productUrl:trimmedUrl||undefined,productName:query,mediaType:'video',sourcePlatform:'tiktok',targetVideoCount:safeVideoCount,targetPhotoCount:0});
         return;
       }
       let expansionQuery = commercialName.trim();
@@ -238,16 +240,18 @@ export const HomeSearchCard: React.FC = () => {
           return;
         }
         selectedUrl = approved.url;
+        selectedImage=approved.image;
+        selectedTitle=approved.title;
         expansionQuery = query;
       }
       await startStreamingSearch({
-        productName: effectiveName,
+        productName: selectedTitle,
         productUrl: selectedUrl || undefined,
         mediaType,
         sourcePlatform: platform, sourceVideoCounts,
         targetVideoCount: safeVideoCount,
         targetPhotoCount: safePhotoCount,
-        referenceImage: imagePreview,
+        referenceImage: selectedImage,
         imageConfirmedLocally: Boolean(imagePreview && selectedUrl),
         verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:expansionQuery,profile:cloudProfileRef.current} : undefined,
       });
@@ -376,9 +380,9 @@ export const HomeSearchCard: React.FC = () => {
                 <button type="button" disabled={isSubmitting} className="w-full rounded-lg py-2 text-sm bg-[#247C72] text-white" onClick={async () => {
                   setIsSubmitting(true); setValidationError(null);
                   try {
-                    await startStreamingSearch({ productName: productName.trim() || commercialName, productUrl: candidate.url,
+                    await startStreamingSearch({ productName: candidate.title, productUrl: candidate.url,
                       mediaType, sourcePlatform: platform, sourceVideoCounts, targetVideoCount: videoTarget, targetPhotoCount: clampCount(targetPhotoInput),
-                      referenceImage: imagePreview, imageConfirmedLocally: true,
+                      referenceImage: candidate.image, imageConfirmedLocally: true,
                       verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:commercialName.trim(),profile:cloudProfileRef.current} : undefined });
                   } catch (error) { setValidationError(error instanceof Error ? error.message : 'تعذر بدء البحث.'); }
                   finally { setIsSubmitting(false); }
@@ -451,7 +455,7 @@ export const HomeSearchCard: React.FC = () => {
             className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors text-left"
           />
           <p className="text-[11px] text-[#616764] mt-1.5">
-            نبدأ من رابط المنتج. مع الصورة وتحليل Gemini، نبحث لاستكمال العدد من قوائم اجتازت مقارنة نفس التصميم؛ بدون صورة نجمع من صفحة الرابط فقط.
+            عند تحديد رابط، نجمع مراجعات أمازون من صفحة المنتج المحددة فقط.
           </p>
         </div>
 

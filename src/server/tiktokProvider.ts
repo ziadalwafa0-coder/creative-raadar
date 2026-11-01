@@ -1,4 +1,4 @@
-type TikTokVideo = {url:string;source:string;title:string;author:string};
+type TikTokVideo = {url:string;source:string;title:string;author:string;thumbnailUrl?:string};
 
 export function parseTikTokProviderRows(rows:unknown,limit:number):TikTokVideo[] {
   if (!Array.isArray(rows)) return [];
@@ -20,7 +20,7 @@ export function parseTikTokProviderRows(rows:unknown,limit:number):TikTokVideo[]
     });
     if (!media || seen.has(String(row.id))) continue;
     seen.add(String(row.id));
-    videos.push({url:media,source:source.href,title:String(row.text || 'فيديو TikTok').slice(0,500),author:String(row.authorMeta?.name || '').slice(0,100)});
+    videos.push({thumbnailUrl:row.videoMeta?.coverUrl||undefined,url:media,source:source.href,title:String(row.text || 'فيديو TikTok').slice(0,500),author:String(row.authorMeta?.name || '').slice(0,100)});
     if (videos.length >= limit) break;
   }
   return videos;
