@@ -305,6 +305,10 @@ const ALLOWED_DOWNLOAD_HOST_SUFFIXES = [
   'images-amazon.com',
   'amazonaws.com',
   'cloudfront.net',
+  'tiktokcdn.com',
+  'tiktokcdn-us.com',
+  'tiktokcdn-eu.com',
+  'tiktokv.com',
 ];
 
 export function isAllowedDownloadHost(rawUrl: string): boolean {
