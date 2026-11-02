@@ -2,8 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext.tsx';
 import { Upload, X, RefreshCw, Video, Image as ImageIcon, Layers, Link as LinkIcon, ExternalLink } from 'lucide-react';
 import { Project } from '../types/index.ts';
-import { analyzeCommercialName, type IdentityCandidate } from '../utils/productVision.ts';
-import { selectCommercialName, type CategoryScore } from '../utils/visualIdentity.ts';
+import { analyzeCommercialName, compareCandidateImages, type IdentityCandidate } from '../utils/productVision.ts';
 import { analyzeImageWithGemini, prepareIdentityImage } from '../utils/geminiIdentity.ts';
 import type { VisualAttribute } from '../types/index.ts';
 
@@ -32,7 +31,7 @@ export const HomeSearchCard: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [commercialName, setCommercialName] = useState('');
-  const [nameNeedsConfirmation,setNameNeedsConfirmation]=useState(false);
+  const [autoListing,setAutoListing]=useState<IdentityCandidate|null>(null);
   const [allowSimilar,setAllowSimilar]=useState(false);
   const [scanProgress, setScanProgress] = useState('');
   const [isScanning, setIsScanning] = useState(false);
@@ -44,7 +43,6 @@ export const HomeSearchCard: React.FC = () => {
   const imageReaderRef = useRef<FileReader | null>(null);
   const nameHintRef = useRef(productName);
   nameHintRef.current = productName;
-  const imageScoresRef = useRef<CategoryScore[] | null>(null);
   const commercialEditedRef = useRef(false);
   const cloudProfileRef = useRef<VisualAttribute | null>(null);
   const preparedImageRef = useRef('');
@@ -54,8 +52,8 @@ export const HomeSearchCard: React.FC = () => {
   useEffect(() => {
     const controller = new AbortController();
     visionController.current = controller;
-    setNameNeedsConfirmation(false);setCommercialName(''); setIdentityCandidates([]); setScanProgress('');
-    imageScoresRef.current = null; commercialEditedRef.current = false;
+    setAutoListing(null);setCommercialName(''); setIdentityCandidates([]); setScanProgress('');
+    commercialEditedRef.current = false;
     cloudProfileRef.current = null; preparedImageRef.current = ''; analyzedNameRef.current = '';
     if (!imagePreview) { setIsScanning(false); return () => controller.abort(); }
     setIsScanning(true);
@@ -71,22 +69,44 @@ export const HomeSearchCard: React.FC = () => {
         controller.signal.throwIfAborted();
         preparedImageRef.current = preparedImage;
         const nameHint = nameHintRef.current;
+        let query:string;
         try {
-          const result = await analyzeImageWithGemini(preparedImage, nameHint, controller.signal, apiFetch);
+          const result=await analyzeImageWithGemini(preparedImage,nameHint,controller.signal,apiFetch);
           controller.signal.throwIfAborted();
-          cloudProfileRef.current = result.profile; analyzedNameRef.current = nameHint;
-          if (!commercialEditedRef.current) {setCommercialName(result.query);setNameNeedsConfirmation(true);}
-          setScanProgress(`تحليل Gemini: ${result.profile.confidence === 'low' ? 'الهوية غير مؤكدة؛ يلزم تأكيد المنتج' : 'تم اقتراح اسم البحث من الصورة والاسم'}. الماركة والموديل لا يُعتبران مؤكدين إلا إذا ظهرا بوضوح.`);
-          return;
-        } catch { controller.signal.throwIfAborted(); }
-        setScanProgress('Gemini غير متاح الآن؛ جاري التحليل المحلي المجاني. أول مرة يتم تنزيل نموذج ويُحفظ في المتصفح.');
-        const picture = await (await fetch(imagePreview)).blob();
-        const identity = await analyzeCommercialName(picture, controller.signal, text => { if (!controller.signal.aborted) setScanProgress(text); }, nameHintRef.current);
+          cloudProfileRef.current=result.profile;analyzedNameRef.current=nameHint;
+          query=result.query;
+        }catch{
+          controller.signal.throwIfAborted();
+          setScanProgress('جاري قراءة صورة المنتج على الجهاز…');
+          const identity=await analyzeCommercialName(await (await fetch(imagePreview)).blob(),controller.signal,
+            text=>{if(!controller.signal.aborted)setScanProgress(text);},nameHint);
+          query=identity.query;
+        }
         controller.signal.throwIfAborted();
-        imageScoresRef.current = identity.scores;
-        const latest = selectCommercialName(identity.scores, nameHintRef.current);
-        if (!commercialEditedRef.current) {setCommercialName(latest.query);setNameNeedsConfirmation(true);}
-        setScanProgress(identity.uncertain ? 'تحليل محلي: اقتراح منخفض الثقة؛ راجع الاسم قبل البحث. ستتم مقارنة صور النتائج قبل جمع الفيديوهات.' : 'تحليل محلي: اسم مقترح حسب الصورة؛ لا يؤكد الماركة أو الموديل. يمكنك تعديله.');
+        if(commercialEditedRef.current)return;
+        setCommercialName(query);
+        setScanProgress('جاري البحث عن المنتج على أمازون ومقارنة صور القوائم…');
+        const response=await apiFetch('/api/product-identity/candidates',{method:'POST',signal:controller.signal,
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({query,productName:nameHint,
+            referenceImage:preparedImage,profile:cloudProfileRef.current,allowSimilar:false})});
+        const data=await response.json();
+        controller.signal.throwIfAborted();
+        if(!response.ok)throw Error(data.error||'تعذّر الوصول إلى قوائم أمازون.');
+        const products:IdentityCandidate[]=data.products||[];
+        let matches=products.filter(row=>data.verification==='gemini'&&data.approvedAsins?.includes(row.asin));
+        if(data.verification==='not-requested'&&products.length){
+          const scores=await compareCandidateImages(await (await fetch(imagePreview)).blob(),products,controller.signal,setScanProgress);
+          matches=products.filter(row=>scores.some(score=>score.id===row.asin&&score.accepted));
+        }
+        controller.signal.throwIfAborted();
+        if(commercialEditedRef.current)return;
+        if(matches.length===1){
+          setAutoListing(matches[0]);setCommercialName(matches[0].title);
+          setScanProgress('تمت مطابقة صورة المنتج تلقائيًا. الاسم الظاهر هو عنوان صفحته على أمازون.');
+        }else{
+          setIdentityCandidates(matches.length?matches:products);
+          setScanProgress(products.length?'ظهرت عدة احتمالات. اختَر صفحة المنتج الصحيحة.':'لم تتأكد مطابقة على أمازون. عدّل عبارة البحث أو أضف رابط المنتج.');
+        }
       } catch (error) {
         if (!controller.signal.aborted) setScanProgress(error instanceof Error ? error.message : 'تعذر تحليل الصورة؛ اكتب اسم البحث التجاري بالإنجليزية.');
       } finally { if (!controller.signal.aborted) setIsScanning(false); }
@@ -147,7 +167,7 @@ export const HomeSearchCard: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedName = productName.trim();
-    const trimmedUrl = productUrl.trim();
+    const trimmedUrl = productUrl.trim() || autoListing?.url || '';
 
     if (!trimmedName && !trimmedUrl && !imagePreview) {
       setValidationError('يرجى كتابة اسم المنتج أو رفع صورته أو إدخال رابط مباشر لصفحة المنتج لبدء البحث');
@@ -159,11 +179,6 @@ export const HomeSearchCard: React.FC = () => {
       return;
     }
 
-    if(imagePreview && nameNeedsConfirmation){
-      setValidationError('راجع اسم البحث بجوار صورة المنتج وأكّده أو عدّله قبل بدء البحث.');
-      document.getElementById('commercial-query')?.focus();
-      return;
-    }
     setValidationError(null);
     setIsSubmitting(true);
     cancelStreamingSearch();
@@ -178,7 +193,7 @@ export const HomeSearchCard: React.FC = () => {
     try {
       let selectedUrl = trimmedUrl;
       let selectedImage=imagePreview;
-      let selectedTitle=effectiveName;
+      let selectedTitle=(!productUrl.trim() && autoListing?.title)||effectiveName;
       if(platform==='tiktok'){
         if(isScanning)throw Error('انتظر اكتمال قراءة الصورة.');
         const query=commercialName.trim()||trimmedName;
@@ -351,12 +366,10 @@ export const HomeSearchCard: React.FC = () => {
           <div className="space-y-2 rounded-xl bg-[#EAF3F2] p-4">
             <label htmlFor="commercial-query" className="block text-sm font-semibold text-[#181B1A]">الاسم التجاري للبحث على أمازون</label>
             <label className="flex gap-2 items-center text-sm"><input type="checkbox" checked={allowSimilar} onChange={e=>{identityRequestRef.current?.abort();setIdentityCandidates([]);setAllowSimilar(e.target.checked);}}/>عرض المنتجات الرائجة من نفس النوع ولو اختلف التصميم</label>
-            <input id="commercial-query" value={commercialName} onChange={event => { identityRequestRef.current?.abort(); commercialEditedRef.current = true;setNameNeedsConfirmation(false); setCommercialName(event.target.value); setIdentityCandidates([]); }} dir="ltr" placeholder="مثال: Microfiber Spray Mop Refillable Bottle" className="w-full h-11 px-3 rounded-lg border border-[#D5D9D2] bg-white text-sm" />
-            <p role="status" className="text-xs text-[#247C72]">{scanProgress}</p>
-            {nameNeedsConfirmation && <label className="flex gap-2 items-center text-sm text-amber-900 bg-amber-50 p-3 rounded-lg">
-              <input type="checkbox" checked={false} onChange={()=>{setNameNeedsConfirmation(false);setValidationError(null);}} />
-              راجعت الاسم المقترح وهو نفس المنتج الموجود في الصورة
-            </label>}
+            <input id="commercial-query" value={commercialName} onChange={event => { identityRequestRef.current?.abort(); commercialEditedRef.current = true;setAutoListing(null); setCommercialName(event.target.value); setIdentityCandidates([]); }} dir="ltr" placeholder="مثال: Microfiber Spray Mop Refillable Bottle" className="w-full h-11 px-3 rounded-lg border border-[#D5D9D2] bg-white text-sm" />
+            {autoListing && <a href={autoListing.url} target="_blank" rel="noopener noreferrer" className="text-xs underline text-[#247C72]">عرض صفحة المنتج المطابق على أمازون</a>}
+            <p role="status"  className="text-xs text-[#247C72]">{scanProgress}</p>
+
             <p className="text-xs text-[#616764]">Gemini يستقبل نسخة مصغرة للتحليل عند تفعيله. الموقع لا يحفظ صورة التحليل على السيرفر. البديل المحلي المجاني ينزّل نموذجًا أول مرة؛ الاسم المقترح لا يثبت الماركة أو الموديل.</p>
           </div>
         )}
@@ -399,7 +412,7 @@ export const HomeSearchCard: React.FC = () => {
               visionController.current?.abort();
               cloudProfileRef.current=null;
               setCommercialName('');
-              setNameNeedsConfirmation(Boolean(imagePreview));
+              setAutoListing(null);
               if (validationError) setValidationError(null);
             }}
             placeholder="أدخل اسم المنتج (مثال: جزامة 9 دور بغطاء)..."
@@ -437,7 +450,7 @@ export const HomeSearchCard: React.FC = () => {
             dir="ltr"
             value={productUrl}
             onChange={(e) => {
-              setProductUrl(e.target.value);
+              setProductUrl(e.target.value);setAutoListing(null);commercialEditedRef.current=true;
               identityRequestRef.current?.abort(); setIdentityCandidates([]);
               if (validationError) setValidationError(null);
             }}
