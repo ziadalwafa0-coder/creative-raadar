@@ -21,6 +21,7 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
         const query=source==='tiktok'?selectedName||parent.verifiedExpansion?.query||parent.productName:parent.productName;
         const response=await request('/api/stream-search',{...init,signal,body:JSON.stringify({...parent,
           searchId:crypto.randomUUID(),sourcePlatform:source,productName:query,
+          discoveryAlias:source==='tiktok'?parent.verifiedExpansion?.profile?.commercialNameEn:undefined,
           productUrl:source==='amazon'?parent.productUrl:undefined,
           referenceImage:source==='amazon'?parent.referenceImage:undefined,
           verifiedExpansion:source==='amazon'?parent.verifiedExpansion:undefined,
