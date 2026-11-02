@@ -5,10 +5,11 @@ import {fetchProductImageAsBase64} from './amazonHttp.ts';
 import {verifyAmazonProductsBatchVisually} from './gemini.ts';
 
 type Clip={title:string;thumbnailUrl?:string;url?:string};
-export async function filterTikTokProducts<T extends Clip>(pool:T[],body:Record<string,unknown>,limit:number,signal:AbortSignal){
+export async function filterTikTokProducts<T extends Clip>(pool:T[],body:Record<string,unknown>,limit:number,signal:AbortSignal,onMatch?:(item:T)=>void){
   const name=String(body.productName||'').slice(0,200);
   if(!body.matchImage && !body.selectedProductUrl){
-    return pool.filter(item=>evaluateStrictProductTitleMatch(item.title.replace(/#/g,' '),name).approved).slice(0,limit);
+    const items=pool.filter(item=>evaluateStrictProductTitleMatch(item.title.replace(/#/g,' '),name).approved).slice(0,limit);
+    items.forEach(item=>onMatch?.(item));return items;
   }
   let reference=parseReferenceImage(body.matchImage);
   if(!reference && typeof body.selectedProductUrl==='string'){
@@ -51,11 +52,11 @@ export async function filterTikTokProducts<T extends Clip>(pool:T[],body:Record<
     batch.forEach((item,index)=>{
       const id='CLIP'+index;
       if(matched.length>=limit)return;
-      if(decisions.get(id)?.approved)matched.push(item);
+      if(decisions.get(id)?.approved){matched.push(item);onMatch?.(item);}
       else if(second?.get(id)?.approved){
         secondLookMatches++;
         item.thumbnailUrl='data:image/jpeg;base64,'+frames.find(f=>f.asin===id)!.imageBase64;
-        matched.push(item);
+        matched.push(item);onMatch?.(item);
       }
     });
   }

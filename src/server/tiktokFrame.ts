@@ -1,9 +1,14 @@
+import pLimit from 'p-limit';
 import {spawn} from 'node:child_process';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,open,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 
-export async function tikTokFrame(raw:string|undefined,signal:AbortSignal,seconds=1){
+const frameSlots=pLimit(2);
+export function tikTokFrame(raw:string|undefined,signal:AbortSignal,seconds=1){
+  return frameSlots(()=>{signal.throwIfAborted();return readFrame(raw,signal,seconds);});
+}
+async function readFrame(raw:string|undefined,signal:AbortSignal,seconds:number){
   let url:URL;try{url=new URL(raw||'');}catch{return null;}
   if(url.protocol!=='https:'||url.username||url.password||url.port||
     !/(^|\.)(tiktokcdn(?:-us|-eu)?\.com|tiktokv\.com)$/.test(url.hostname))return null;
@@ -12,17 +17,18 @@ export async function tikTokFrame(raw:string|undefined,signal:AbortSignal,second
     const bounded=AbortSignal.any([signal,AbortSignal.timeout(18000)]);
     const res=await fetch(url,{signal:bounded,redirect:'error'});
     if(!res.ok||!res.body)return null;
-    const reader=res.body.getReader(),chunks:Uint8Array[]=[];let size=0;
+    directory=await mkdtemp(path.join(tmpdir(),'radaar-frame-'));
+    const file=path.join(directory,'clip.mp4');
+    const handle=await open(file,'wx');
+    const reader=res.body.getReader();
+    let size=0;
     try{
       while(true){
         const part=await reader.read();if(part.done)break;
         size+=part.value.length;if(size>18*1024*1024)return null;
-        chunks.push(part.value);
+        await handle.writeFile(part.value);
       }
-    }finally{await reader.cancel().catch(()=>{});}
-    directory=await mkdtemp(path.join(tmpdir(),'radaar-frame-'));
-    const file=path.join(directory,'clip.mp4');
-    await writeFile(file,Buffer.concat(chunks));
+    }finally{await handle.close();await reader.cancel().catch(()=>{});}
     const jpg=await new Promise<Buffer>((resolve,reject)=>{
       const output:Buffer[]=[];
       const child=spawn('ffmpeg',['-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',file,'-ss',String(seconds),'-frames:v','1','-vf','scale=480:-2','-f','image2pipe','-vcodec','mjpeg','pipe:1'],{windowsHide:true,signal:bounded});

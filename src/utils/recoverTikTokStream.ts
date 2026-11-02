@@ -6,13 +6,34 @@ export async function recoverTikTokStream(response:Response, options:RequestInit
   if(!response.ok)return response;
   const {searchId,productName,targetVideoCount,matchImage,selectedProductUrl,discoveryAlias,previousPosts=[]}=JSON.parse(String(options.body));
   const target=Math.max(1,Math.min(500,Number(targetVideoCount)||10));
-  const signal=options.signal||new AbortController().signal;
-  const original=await response.text();
-  const events=original.trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
-  const seen=new Set(events.filter(e=>e.type==='result'&&e.asset).map(e=>e.asset.sourceUrl));
-  const reply=(body:string)=>new Response(body,{headers:{'Content-Type':'application/x-ndjson'}});
-  if(seen.size>=target)return reply(original);
-  const recovered=[];
+  const controller=new AbortController();
+  const signal=options.signal?AbortSignal.any([controller.signal,options.signal]):controller.signal;
+  const encoder=new TextEncoder();
+  return new Response(new ReadableStream<Uint8Array>({
+    async start(writer){
+      const send=(event:any)=>writer.enqueue(encoder.encode(JSON.stringify(event)+'\n'));
+      try{
+      const seen=new Set<string>();
+      let terminal:any;
+      const reader=response.body?.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer='';
+      const line=(text:string)=>{
+        if(!text.trim())return;
+        const event=JSON.parse(text);
+        if(event.type==='completed'||event.type==='failed'){terminal=event;return;}
+        if(event.asset){
+          if(seen.has(event.asset.sourceUrl)||seen.size>=target)return;
+          seen.add(event.asset.sourceUrl);
+        }
+        send(event);
+      };
+      if(reader)try{
+        for(;;){const {done,value}=await reader.read();if(done)break;buffer+=value;
+          const lines=buffer.split('\n');buffer=lines.pop()||'';lines.forEach(line);}
+        line(buffer);
+      }catch(error){signal.throwIfAborted();terminal=undefined;}
+      finally{await reader.cancel().catch(()=>{});}
+      const beforeRecovery=seen.size;
   const attempted=new Set([...seen,...previousPosts]);
   const shortName=String(productName).split(/\s+(?:with|for)\s+|[,|]/i)[0].trim();
   const queries=[productName];
@@ -40,7 +61,7 @@ export async function recoverTikTokStream(response:Response, options:RequestInit
       if(!accepted.has(item.source))continue;
       if(seen.has(item.source)||seen.size>=target)continue;
       seen.add(item.source);
-      recovered.push({type:'result',searchId,asset:{
+      send({type:'result',searchId,asset:{
         id:'tt-'+searchId+'-'+item.source.split('/').pop(),searchId,platform:'tiktok',mediaType:'video',
         thumbnailUrl:verified.posters?.[item.source]||item.thumbnailUrl,mediaUrl:item.url,downloadUrl:item.url,productListingUrl:item.source,sourceUrl:item.source,
         reviewerOrChannel:item.author,title:item.title,provenance:'unresolved_source',
@@ -51,9 +72,12 @@ export async function recoverTikTokStream(response:Response, options:RequestInit
     }
     }catch{signal.throwIfAborted();}
   }
-    if(!recovered.length)return reply(original);
-    const merged=events.filter(e=>e.type!=='completed'&&e.type!=='failed');
-    merged.push(...recovered,{type:'completed',searchId,requestedCount:target,foundCount:seen.size,
-      downloadableCount:seen.size,reasonIfPartial:seen.size<target?'نتائج تيك توك المتاحة أقل من العدد المطلوب.':undefined});
-    return reply(merged.map(e=>JSON.stringify(e)).join('\n')+'\n');
+    if(terminal && beforeRecovery===seen.size && (terminal.type==='completed'||!seen.size))send(terminal);
+    else send({type:'completed',searchId,requestedCount:target,foundCount:seen.size,downloadableCount:seen.size,
+      reasonIfPartial:seen.size<target?'نتائج تيك توك المتاحة أقل من العدد المطلوب.':undefined});
+    writer.close();
+    }catch(error){writer.error(error);}
+    },
+    cancel(){controller.abort();}
+  }),{headers:{'Content-Type':'application/x-ndjson'}});
 }

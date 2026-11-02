@@ -559,14 +559,13 @@ export async function handleStreamSearch(
       if(mediaType!=='video')throw Error('بحث TikTok يدعم الفيديوهات فقط.');
       const excluded=new Set(Array.isArray(req.body.previousPosts)?req.body.previousPosts.slice(0,500):[]);
       const pool=(await searchPublicTikTok(rawProductName,Math.min(500,targetVideoCount+6+excluded.size),abortController.signal)).filter(item=>!excluded.has(item.source));
-      const items=await filterTikTokProducts(pool,req.body,targetVideoCount,abortController.signal);
-      for(const item of items){
+      await filterTikTokProducts(pool,req.body,targetVideoCount,abortController.signal,item=>{
         const timestamp=new Date().toISOString();
         sendEvent({type:'result',searchId,timestamp,asset:{id:'tt-'+searchId+'-'+(++foundVideos),searchId,
           mediaType:'video',platform:'tiktok',title:item.title,thumbnailUrl:item.thumbnailUrl,mediaUrl:item.url,downloadUrl:item.url,sourceUrl:item.source,
           productListingUrl:item.source,reviewerOrChannel:item.author,provenance:'unresolved_source',isCustomerReview:false,
           matchCategory:'permitted_variation',matchScore:0,userFacingMatchLabel:req.body.matchImage||req.body.selectedProductUrl?'تطابق بصري مع صورة المنتج':'مطابقة وصف الفيديو',sentiment:'neutral',collectedAt:timestamp}});
-      }
+      });
       sendEvent({type:'completed',searchId,timestamp:new Date().toISOString(),requestedCount:targetVideoCount,foundCount:foundVideos,
         downloadableCount:foundVideos,reasonIfPartial:foundVideos<targetVideoCount?'نتائج TikTok المتاحة أقل من المطلوب.':undefined});
       return;
