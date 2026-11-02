@@ -1,11 +1,23 @@
 import {searchTikTokProvider} from './tiktokProvider.ts';
 import {searchFreeTikTok} from './tiktokFreeSearch.ts';
 export async function searchPublicTikTok(query:string,limit:number,signal:AbortSignal){
-  if(process.env.APIFY_API_TOKEN?.trim())return searchTikTokProvider(query,limit,signal);
-  try{
-    const free=await searchFreeTikTok(query,limit,signal);
-    if(free.length)return free;
-  }catch{signal.throwIfAborted();}
+  const byPost=new Map<string,Awaited<ReturnType<typeof searchFreeTikTok>>[number]>();
+  const sources=[...(process.env.APIFY_API_TOKEN?.trim()?[searchTikTokProvider]:[]),searchFreeTikTok,searchNativeTikTok];
+  let lastError:unknown;
+  let readable=false;
+  for(const source of sources){
+    signal.throwIfAborted();
+    try{
+      const rows=await source(query,limit,signal);
+      readable=true;
+      for(const row of rows){byPost.set(row.source,row);if(byPost.size>=limit)break;}
+      if(byPost.size>=limit)break;
+    }catch(error){signal.throwIfAborted();lastError=error;}
+  }
+  if(!readable && lastError)throw lastError;
+  return [...byPost.values()];
+}
+async function searchNativeTikTok(query:string,limit:number,signal:AbortSignal){
   const url=new URL('https://www.tiktok.com/api/search/general/full/');
   url.search=new URLSearchParams({keyword:query.slice(0,160),count:String(Math.min(30,limit)),offset:'0'}).toString();
   const response=await fetch(url,{signal:AbortSignal.any([signal,AbortSignal.timeout(12000)]),headers:{Accept:'application/json'}});
