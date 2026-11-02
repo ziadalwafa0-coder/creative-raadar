@@ -201,6 +201,8 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
             </h1>
             {project.productListingUrl && <small className="text-[#247C72]">المنتج المثبّت · {project.productListingUrl.match(/(?:dp|product)\/([A-Z0-9]{10})/i)?.[1]||'الصفحة المختارة'}</small>}
 
+            {project.jobState==='completed_partial' && project.logs.at(-1)?.message &&
+              <p role="status" className="mt-1 text-xs text-amber-800">{project.logs.at(-1)?.message}</p>}
             {/* Single-line progress summary */}
             <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-[#616764]">
               <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border font-semibold text-[11px] ${stage.color}`}>

@@ -433,7 +433,8 @@ export async function fetchAmazonUsProductVideos(
   let exhausted = Boolean(reviewsHtml) && !nextAmazonReviewPage(reviewsHtml,dpUrl,asin);
   let html = reviewsHtml;
   const visited = new Set<string>();
-  for (let page = 1; html && delivered.size < limit && !options.shouldStop?.() && page < 10; page++) {
+  const pageBudget=Math.max(10,Math.min(50,Math.ceil(limit/4)));
+  for (let page = 1; html && delivered.size < limit && !options.shouldStop?.() && page < pageBudget; page++) {
     signal?.throwIfAborted();
     const next = nextAmazonReviewPage(html, dpUrl, asin);
     if (!next) break;
@@ -451,8 +452,9 @@ export async function fetchAmazonUsProductVideos(
   }
   // Amazon's public product carousel can return a different subset on each view.
   // Merge a bounded number of ordinary successful page reads; never retry a block.
+  const carouselBudget=Math.max(3,Math.min(12,Math.ceil(limit/10)));
   let unchangedViews=0;
-  for (let view=0; dpHtml && delivered.size<limit && !options.shouldStop?.() && view<3;view++) {
+  for (let view=0; dpHtml && delivered.size<limit && !options.shouldStop?.() && view<carouselBudget;view++) {
     signal?.throwIfAborted();
     exhausted=false;
     try {

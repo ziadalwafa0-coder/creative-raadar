@@ -71,3 +71,12 @@ test('next page accepts a product slug and Amazon tracking suffix only for the s
   assert.match(nextAmazonReviewPage(tracked,'https://www.amazon.com',asin)||'',/pageNumber=2/);
   assert.equal(nextAmazonReviewPage(tracked.replace(asin,'B099999999'),'https://www.amazon.com',asin),null);
 });
+
+test('large requests can reach matching reviews past the tenth page',async()=>{
+ const result=await fetchAmazonUsProductVideos(asin,undefined,{limit:200,fetchHtml:async(url)=>{
+   if(!url.includes('product-reviews'))return '';
+   const page=Number(new URL(url).searchParams.get('pageNumber')||1);
+   return page===12?review(12):next(page+1);
+ }});
+ assert.equal(result.length,1);
+});
