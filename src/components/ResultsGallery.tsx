@@ -11,7 +11,7 @@ interface Props {
 }
 
 export const ResultsGallery: React.FC<Props> = ({ project }) => {
-  const { showToast, refreshProjects, apiFetch, downloadWithSession, sessionId } = useApp();
+  const { showToast, refreshProjects, apiFetch, fetchMediaBlob, downloadWithSession, sessionId } = useApp();
 
   const [previewingAsset, setPreviewingAsset] = useState<CandidateAsset | null>(null);
   const [isRetryingAllFailed, setIsRetryingAllFailed] = useState<boolean>(false);
@@ -52,6 +52,30 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
     showToast('جاري تجهيز وتنزيل حزمة (.ZIP) مباشرة من الخادم...', 'info');
 
     try {
+      if(selected.size && isEphemeralProject){
+        const {downloadZip}=await import('client-zip');
+        const manifest:Array<{file:string;source:string}>=[];
+        const failed=new Set<string>();
+        async function* files(){
+          for(const asset of candidates.filter(a=>selected.has(a.id))){
+            const url=asset.downloadUrl||asset.mediaUrl;
+            const file=url&&await fetchMediaBlob('/api/stream-search/download?'+new URLSearchParams({url,type:asset.mediaType}),true);
+            if(!file || !file.blob.size){failed.add(asset.id);continue;}
+            const name=(manifest.length+1)+'-'+asset.platform+(asset.mediaType==='video'?'.mp4':'.jpg');
+            manifest.push({file:name,source:asset.sourceUrl});
+            yield {name,input:file.blob};
+          }
+          if(!manifest.length)throw Error('تعذّر تحميل الملفات المختارة. الاختيار محفوظ لإعادة المحاولة.');
+          yield {name:'Sources.json',input:JSON.stringify(manifest,null,2)};
+        }
+        const blob=await downloadZip(files()).blob();
+        const url=URL.createObjectURL(blob);
+        const link=document.createElement('a');link.href=url;link.download='Creative-Radaar-selected.zip';link.click();
+        setTimeout(()=>URL.revokeObjectURL(url),60000);
+        if(failed.size)setSelected(failed);
+        showToast('تم تجهيز '+manifest.length+' ملف'+(failed.size?'، والملفات الفاشلة محددة لإعادة المحاولة.':''),failed.size?'warn':'success');
+        return;
+      }
       let href=exportZipHref;
       if (isEphemeralProject) {
         const exportId=crypto.randomUUID();
@@ -70,6 +94,8 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
       if (ok) {
         showToast('تم تنزيل حزمة (.ZIP) بنجاح', 'success');
       }
+    } catch(error){
+      showToast(error instanceof Error?error.message:'تعذّر تجهيز الملفات المختارة','warn');
     } finally {
       setIsExportingZip(false);
     }
