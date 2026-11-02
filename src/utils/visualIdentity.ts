@@ -31,6 +31,7 @@ export const commercialProducts = [
   ['Car Lumbar Support Cushion', 'a curved foam lower back support cushion for a car seat'],
   ['Kids Folding Play Mat', 'a large soft colorful padded folding play mat for children'],
   ['Portable Manual Espresso Maker', 'a compact hand operated portable espresso coffee maker with a cylindrical body, coffee basket, cup and pumping handle'],
+  ['Electric UV Mosquito Killer Lamp', 'a small electric insect trap lamp with a purple ultraviolet light inside a dark opening'],
   ['', 'an unrelated object, food, book, animal or empty scene rather than the requested household product'],
 ] as const;
 

@@ -84,7 +84,6 @@ export const HomeSearchCard: React.FC = () => {
         }
         controller.signal.throwIfAborted();
         if(commercialEditedRef.current)return;
-        setCommercialName(query);
         setScanProgress('جاري البحث عن المنتج على أمازون ومقارنة صور القوائم…');
         const response=await apiFetch('/api/product-identity/candidates',{method:'POST',signal:controller.signal,
           headers:{'Content-Type':'application/json'},body:JSON.stringify({query,productName:nameHint,
@@ -213,7 +212,7 @@ export const HomeSearchCard: React.FC = () => {
           const refined = await analyzeImageWithGemini(preparedImageRef.current, trimmedName, controller.signal, apiFetch);
           controller.signal.throwIfAborted();
           cloudProfileRef.current = refined.profile; analyzedNameRef.current = trimmedName;
-          if (!commercialEditedRef.current) { query = refined.query; setCommercialName(query); }
+          if (!commercialEditedRef.current) { query = refined.query; }
         }
         setScanProgress(`البحث على أمازون عن: ${query} ثم مقارنة صور المنتجات…`);
         const response = await apiFetch('/api/product-identity/candidates', {
