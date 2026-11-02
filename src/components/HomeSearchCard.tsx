@@ -466,8 +466,9 @@ export const HomeSearchCard: React.FC = () => {
           <select value={platform} className="block mt-2 p-2 border rounded-lg" onChange={e=>{
             const next=e.target.value==='tiktok'?'tiktok':e.target.value==='all'?'all':'amazon';setPlatform(next);setIdentityCandidates([]);
             if(next==='tiktok')setMediaType('video');
-          }}><option value="amazon">Amazon · ريفيوهات العملاء</option><option value="tiktok">TikTok · فيديوهات المنتجات</option><option value="all">Amazon + TikTok</option></select>
+          }}><option value="amazon">أمازون · ريفيوهات العملاء فقط</option><option value="tiktok">TikTok · فيديوهات المنتجات</option><option value="all">Amazon + TikTok</option></select>
         </label>
+        {platform==='amazon' && <p className="text-xs text-[#616764]">العدد المطلوب هدف للبحث. لو المراجعات أقل، هنعرض المتاح من العملاء فقط.</p>}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
             نوع النتائج
