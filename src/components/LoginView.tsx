@@ -30,10 +30,10 @@ export const LoginView: React.FC = () => {
 
   return (
     <div
-      className="min-h-screen bg-[#F6F7F4] text-[#181B1A] flex flex-col items-center justify-center px-4 py-8 font-sans"
+      className="radaar-shell min-h-screen bg-[#F6F7F4] text-[#181B1A] flex flex-col items-center justify-center px-4 py-8 font-sans"
       dir="rtl"
     >
-      <div className="w-full max-w-[400px] bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_4px_20px_rgba(0,0,0,0.03)] p-6 sm:p-8 space-y-6">
+      <div className="radaar-panel radaar-enter w-full max-w-[400px] bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_4px_20px_rgba(0,0,0,0.03)] p-6 sm:p-8 space-y-6">
         {/* Brand Header */}
         <div className="flex flex-col items-center text-center gap-2.5">
           <div className="w-12 h-12 rounded-2xl bg-[#247C72] flex items-center justify-center text-white shadow-xs">

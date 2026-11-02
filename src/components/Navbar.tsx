@@ -14,7 +14,7 @@ export const Navbar: React.FC = () => {
   const isSearchActive = activeTab === 'search' && !currentProject;
 
   return (
-    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200/80">
+    <header className="radaar-nav sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200/80">
       <div className="max-w-[760px] mx-auto px-2.5 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-1.5">
         {/* Brand Logo: Creative Radaar */}
         <button

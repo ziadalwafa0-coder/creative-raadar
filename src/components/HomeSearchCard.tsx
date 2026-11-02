@@ -277,9 +277,14 @@ export const HomeSearchCard: React.FC = () => {
 
   return (
     <div className="w-full max-w-[760px] mx-auto">
+      <section className="radaar-hero radaar-enter">
+        <div><p lang="en" dir="ltr">CREATIVE RADAAR</p><h1>اكتشف فيديوهات منتجك</h1>
+        <span>ارفع صورة المنتج أو اكتب اسمه، واختَر المصادر اللي تناسبك.</span></div>
+        <div className="radaar-orbit" aria-hidden="true"><i/><b/></div>
+      </section>
       <form
         onSubmit={handleSubmit}
-        className="bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-5 sm:p-7 space-y-5"
+        className="radaar-panel bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-5 sm:p-7 space-y-5"
       >
         {/* 1) Large Drag/Drop Product Image Box */}
         <div>
@@ -296,6 +301,7 @@ export const HomeSearchCard: React.FC = () => {
 
           {!imagePreview ? (
             <div
+              role="button" tabIndex={0} aria-label="رفع صورة المنتج" onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fileInputRef.current?.click();}}}
               onDragOver={(e) => {
                 e.preventDefault();
                 setIsDragging(true);
@@ -303,7 +309,7 @@ export const HomeSearchCard: React.FC = () => {
               onDragLeave={() => setIsDragging(false)}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
-              className={`cursor-pointer rounded-xl border-2 border-dashed transition-all p-7 sm:p-9 text-center flex flex-col items-center justify-center gap-2.5 ${
+              className={`radaar-upload cursor-pointer rounded-xl border-2 border-dashed transition-all p-7 sm:p-9 text-center flex flex-col items-center justify-center gap-2.5 ${
                 isDragging
                   ? 'border-[#247C72] bg-[#EAF3F2]/50'
                   : 'border-[#D5D9D2] bg-[#FAFBF9] hover:border-[#247C72]/60 hover:bg-[#F6F7F4]'
@@ -368,7 +374,7 @@ export const HomeSearchCard: React.FC = () => {
             <label className="flex gap-2 items-center text-sm"><input type="checkbox" checked={allowSimilar} onChange={e=>{identityRequestRef.current?.abort();setIdentityCandidates([]);setAllowSimilar(e.target.checked);}}/>عرض المنتجات الرائجة من نفس النوع ولو اختلف التصميم</label>
             <input id="commercial-query" value={commercialName} onChange={event => { identityRequestRef.current?.abort(); commercialEditedRef.current = true;setAutoListing(null); setCommercialName(event.target.value); setIdentityCandidates([]); }} dir="ltr" placeholder="مثال: Microfiber Spray Mop Refillable Bottle" className="w-full h-11 px-3 rounded-lg border border-[#D5D9D2] bg-white text-sm" />
             {autoListing && <a href={autoListing.url} target="_blank" rel="noopener noreferrer" className="text-xs underline text-[#247C72]">عرض صفحة المنتج المطابق على أمازون</a>}
-            <p role="status"  className="text-xs text-[#247C72]">{scanProgress}</p>
+            <p data-scanning={isScanning} role="status"  className="text-xs text-[#247C72]">{scanProgress}</p>
 
             <p className="text-xs text-[#616764]">Gemini يستقبل نسخة مصغرة للتحليل عند تفعيله. الموقع لا يحفظ صورة التحليل على السيرفر. البديل المحلي المجاني ينزّل نموذجًا أول مرة؛ الاسم المقترح لا يثبت الماركة أو الموديل.</p>
           </div>

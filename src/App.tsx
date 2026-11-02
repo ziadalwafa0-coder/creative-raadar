@@ -113,7 +113,7 @@ const MainContent: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#F6F7F4] text-[#181B1A] flex flex-col font-sans relative" dir="rtl">
+    <div className="radaar-shell min-h-screen bg-[#F6F7F4] text-[#181B1A] flex flex-col font-sans relative" dir="rtl">
       {isWindowDragging && !currentProject && activeTab === 'search' && (
         <div className="fixed inset-0 z-50 bg-[#181B1A]/60 backdrop-blur-xs flex flex-col items-center justify-center p-6 pointer-events-none">
           <div className="border-2 border-dashed border-[#247C72] bg-white rounded-2xl p-8 max-w-md w-full text-center shadow-xl flex flex-col items-center gap-3">

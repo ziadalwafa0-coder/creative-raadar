@@ -81,7 +81,7 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
   };
 
   return (
-    <div className="group bg-white rounded-2xl border border-[#E2E5DF] hover:border-[#247C72]/50 transition-all overflow-hidden flex flex-col justify-between">
+    <div className="radaar-result radaar-enter group bg-white rounded-2xl border border-[#E2E5DF] hover:border-[#247C72]/50 transition-all overflow-hidden flex flex-col justify-between">
       {/* Thumbnail Surface */}
       <div
         className="relative aspect-video w-full bg-[#181B1A] overflow-hidden cursor-pointer"

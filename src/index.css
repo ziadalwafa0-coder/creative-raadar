@@ -30,3 +30,31 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* The radar motif marks the discovery step; motion stays inside the graphic. */
+.radaar-shell {
+  background: radial-gradient(ellipse at 90% 0%, #e2f2ed, transparent 32rem),
+              radial-gradient(ellipse at 5% 20%, #f6f0e5, transparent 30rem), #f5f7f5;
+}
+.radaar-nav {background:rgb(251 253 251 / 94%);box-shadow:0 2px 16px #143a3210}
+.radaar-panel,.radaar-result {box-shadow:0 8px 30px -12px #173e3840;border-color:#d9e5e0}
+.radaar-hero {position:relative;isolation:isolate;overflow:hidden;background:linear-gradient(115deg,#214f50,#10403d 65%,#163331);color:#fff;padding:clamp(1.25rem,4vw,2.3rem);border-radius:1.3rem;margin-bottom:1rem;box-shadow:0 9px 24px -12px #123e3b66}
+.radaar-hero>div:first-child {position:relative;z-index:1;max-width:80%}
+.radaar-hero p {font:700 .64rem/1.5 var(--font-en);letter-spacing:.22em;text-align:right;color:#a5dccc}
+.radaar-hero h1 {font-size:clamp(1.35rem,4vw,2rem);font-weight:800;line-height:1.5;margin:.35rem 0}
+.radaar-hero span {font-size:.85rem;line-height:1.8;color:#d5e7e2}
+.radaar-orbit {position:absolute;left:-1.5rem;top:50%;translate:0 -50%;width:clamp(8rem,24vw,13rem);aspect-ratio:1;border-radius:50%;background:repeating-radial-gradient(circle,transparent 0 17%,#a2dfcb38 17.5% 18%,transparent 18.5% 29%);border:1px solid #b3edda44;opacity:.8}
+.radaar-orbit i {display:block;height:100%;border-radius:50%;background:conic-gradient(transparent 295deg,#8dd9c738 353deg,transparent 354deg)}
+.radaar-orbit b {position:absolute;top:33%;left:27%;width:.5rem;height:.5rem;border-radius:50%;background:#a7f6d5;box-shadow:0 0 12px #a7f6d5}
+.radaar-upload {background:linear-gradient(140deg,#f0f8f4,#fafbf7);border-color:#9abeb3}
+.radaar-shell :focus-visible {outline:3px solid #388f80;outline-offset:3px}
+@media (prefers-reduced-motion:no-preference) {
+  .radaar-enter {animation:radaar-appear .35s ease-out both}
+  .radaar-orbit i {animation:radaar-sweep 5s ease-in-out 1 both}
+  .radaar-shell [data-scanning=true]::before {content:'';display:inline-block;background:#318a76;border-radius:50%;width:.5rem;height:.5rem;margin-inline-end:.5rem;animation:radaar-pulse 1.5s ease-in-out infinite}
+  @media (hover:hover) {.radaar-result:hover {transform:translateY(-2px);box-shadow:0 10px 24px -12px #173e3850}.radaar-upload:hover svg {transform:translateY(-2px);transition:transform .18s}}
+}
+@media (prefers-reduced-motion:reduce) {.radaar-shell *, .radaar-shell *::before {animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+@keyframes radaar-appear {from {opacity:.25;translate:0 5px}to {opacity:1;translate:0 0}}
+@keyframes radaar-sweep {from {transform:rotate(-150deg)}to {transform:rotate(65deg)}}
+@keyframes radaar-pulse {50% {opacity:.35}}
