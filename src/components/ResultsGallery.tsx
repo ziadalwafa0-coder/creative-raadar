@@ -1,3 +1,4 @@
+import {reviewTone} from '../utils/reviewTone.ts';
 import React, { useState, useEffect } from 'react';
 import { Project, CandidateAsset } from '../types/index.ts';
 import { useApp } from '../context/AppContext.tsx';
@@ -20,7 +21,9 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
   const candidates = project.candidates || [];
   const [tab,setTab]=useState<'amazon'|'tiktok'>(project.settings?.sourcePriority?.[0]==='tiktok'?'tiktok':'amazon');
   const showTabs=project.mediaTypeRequested!=='photo' && (project.sourceVideoCounts || (project.settings?.sourcePriority?.includes('amazon') && project.settings?.sourcePriority?.includes('tiktok')));
-  const visible=showTabs?candidates.filter(asset=>asset.platform===tab):candidates;
+  const [selected,setSelected]=useState<Set<string>>(new Set());
+  const [tone,setTone]=useState('');
+  const visible=candidates.filter(asset=>(!showTabs||asset.platform===tab)&&(!tone||reviewTone(asset.title,asset.reviewStars)===tone));
   const terminalMessage = ['completed_partial', 'failed'].includes(project.jobState)
     ? project.logs.at(-1)?.message
     : undefined;
@@ -41,20 +44,6 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
     ? `/api/stream-search/export-zip?searchId=${encodeURIComponent(rawSearchId)}${tokenParam}`
     : `/api/projects/${encodeURIComponent(project.id)}/export?type=all${tokenParam}`;
 
-  // Keep server's recentSearchResults synced with current UI candidates (survives server restarts)
-  useEffect(() => {
-    if (!isEphemeralProject || candidates.length === 0) return;
-    apiFetch('/api/stream-search/prepare-zip', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        searchId: rawSearchId,
-        productName: project.name,
-        assets: candidates,
-      }),
-    }).catch(() => {});
-  }, [isEphemeralProject, rawSearchId, project.name, candidates.length]);
-
   const handleExportZipClick = async (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     if (isExportingZip || candidates.length === 0) return;
@@ -63,23 +52,21 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
     showToast('جاري تجهيز وتنزيل حزمة (.ZIP) مباشرة من الخادم...', 'info');
 
     try {
+      let href=exportZipHref;
       if (isEphemeralProject) {
-        await apiFetch('/api/stream-search/prepare-zip', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            searchId: rawSearchId,
-            productName: project.name,
-            assets: candidates,
-          }),
-        }).catch(() => {});
+        const exportId=crypto.randomUUID();
+        const assets=selected.size?candidates.filter(a=>selected.has(a.id)):candidates;
+        const ready=await apiFetch('/api/stream-search/prepare-zip',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({searchId:exportId,productName:project.name,assets})});
+        if(!ready.ok){showToast('تعذّر تجهيز الملفات المختارة','warn');return;}
+        href='/api/stream-search/export-zip?searchId='+exportId+tokenParam;
       }
 
       const safeZipName = `${(project.name || 'Creative_Radaar_Export')
         .replace(/[^a-zA-Z0-9_\u0600-\u06FF-]/g, '_')
         .slice(0, 40)}_${new Date().toISOString().split('T')[0]}.zip`;
 
-      const ok = await downloadWithSession(exportZipHref, safeZipName);
+      const ok = await downloadWithSession(href, safeZipName);
       if (ok) {
         showToast('تم تنزيل حزمة (.ZIP) بنجاح', 'success');
       }
@@ -189,7 +176,7 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
               ) : (
                 <Download className="w-3.5 h-3.5" />
               )}
-              <span>{isExportingZip ? 'جاري تجهيز (.ZIP)...' : 'تنزيل الكل (.ZIP)'}</span>
+              <span>{isExportingZip ? 'جاري تجهيز (.ZIP)...' : selected.size?'تنزيل المختار ('+selected.size+')':'تنزيل الكل (.ZIP)'}</span>
             </a>
           </div>
         </div>
@@ -201,19 +188,22 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
           const quota=project.sourceVideoCounts?.[source];
           return <button type="button" key={source} aria-pressed={source===tab} onClick={()=>setTab(source)}
             className={'rounded-xl border px-4 py-2 text-sm '+(source===tab?'bg-[#247C72] text-white':'bg-white')}>
-            {source==='amazon'?'أمازون':'تيك توك'} ({count}{quota?' / '+quota:''})
+            {source==='amazon'?'أمازون':'تيك توك'} ({count}{quota?' / '+quota:''}) {project.sourceStatus?.[source]}
           </button>;
         })}
       </div>}
+      {!!candidates.length && <label className="text-sm">تقييم الفيديو <select value={tone} onChange={e=>setTone(e.target.value)}>
+        {['','إيجابي','سلبي','مختلط','محايد','غير واضح'].map(t=><option key={t} value={t}>{t||'الكل'}</option>)}</select></label>}
       {/* Results Grid */}
       {visible.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {visible.map((asset) => (
+            <div key={asset.id}>{isEphemeralProject && <label className="text-sm"><input type="checkbox" checked={selected.has(asset.id)}
+              onChange={()=>setSelected(old=>{const next=new Set(old);if(next.has(asset.id))next.delete(asset.id);else next.add(asset.id);return next;})}/> اختيار للتنزيل</label>}
             <AssetCard
-              key={asset.id}
               asset={asset}
               onPreview={(a) => setPreviewingAsset(a)}
-            />
+            /></div>
           ))}
         </div>
       ) : (

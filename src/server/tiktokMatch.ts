@@ -20,6 +20,7 @@ export async function filterTikTokProducts<T extends Clip>(pool:T[],body:Record<
   }
   if(!reference)return [];
   const matched:T[]=[];
+  let visuallyChecked=0,secondLookMatches=0;
   for(let i=0;i<pool.length&&matched.length<limit;i+=5){
     signal.throwIfAborted();
     const batch=pool.slice(i,i+5);
@@ -39,7 +40,25 @@ export async function filterTikTokProducts<T extends Clip>(pool:T[],body:Record<
     if(!valid.length)continue;
     const decisions=await verifyAmazonProductsBatchVisually(reference.base64,reference.mimeType,name,undefined,valid,undefined,signal);
     if(!decisions)break;
-    batch.forEach((item,index)=>{if(decisions.get('CLIP'+index)?.approved&&matched.length<limit)matched.push(item);});
+    visuallyChecked+=valid.length;
+    const unclear=batch.map((item,index)=>({item,index})).filter(({index})=>!decisions.get('CLIP'+index)?.approved);
+    const extra=await Promise.all(unclear.map(async({item,index})=>{
+      const frame=await tikTokFrame(item.url,signal,4);
+      return frame?{asin:'CLIP'+index,title:item.title,imageBase64:frame.base64,imageMimeType:frame.mimeType}:null;
+    }));
+    const frames=extra.filter(f=>f!==null);
+    const second=frames.length?await verifyAmazonProductsBatchVisually(reference.base64,reference.mimeType,name,undefined,frames,undefined,signal):null;
+    batch.forEach((item,index)=>{
+      const id='CLIP'+index;
+      if(matched.length>=limit)return;
+      if(decisions.get(id)?.approved)matched.push(item);
+      else if(second?.get(id)?.approved){
+        secondLookMatches++;
+        item.thumbnailUrl='data:image/jpeg;base64,'+frames.find(f=>f.asin===id)!.imageBase64;
+        matched.push(item);
+      }
+    });
   }
+  console.info('[TikTok match counts]',{visuallyChecked,matched:matched.length,secondLookMatches});
   return matched;
 }

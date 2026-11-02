@@ -1,3 +1,4 @@
+import {sessionMetrics} from '../utils/sessionMetrics.ts';
 import {recoverTikTokStream} from '../utils/recoverTikTokStream.ts';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {combinedSearch} from '../utils/combinedSearch.ts';
@@ -41,6 +42,7 @@ interface AppContextType {
     productUrl?: string;
     mediaType: Project['mediaTypeRequested'];
     sourcePlatform?: 'all' | 'amazon' | 'tiktok';
+    previousAssets?:CandidateAsset[];
     amazonDiscoveryBlocked?:boolean;
     sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
@@ -219,6 +221,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     productUrl?: string;
     mediaType: Project['mediaTypeRequested'];
     sourcePlatform?: 'all' | 'amazon' | 'tiktok';
+    previousAssets?:CandidateAsset[];
     amazonDiscoveryBlocked?:boolean;
     sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
@@ -248,6 +251,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const effectiveVideoTarget = params.mediaType === 'photo' ? 0 : params.targetVideoCount;
     const effectivePhotoTarget = params.mediaType === 'video' ? 0 : params.targetPhotoCount;
+    const previous=params.previousAssets||[];
+    const remainingVideos=Math.max(0,effectiveVideoTarget-previous.filter(a=>a.mediaType==='video').length);
+    const remainingPhotos=Math.max(0,effectivePhotoTarget-previous.filter(a=>a.mediaType==='photo').length);
+    const remainingQuotas=params.sourceVideoCounts && Object.fromEntries(Object.entries(params.sourceVideoCounts).map(([source,count])=>[source,Math.max(0,count-previous.filter(a=>a.platform===source&&a.mediaType==='video').length)]));
     const totalTarget = effectiveVideoTarget + effectivePhotoTarget;
 
     const sourcePlatform = params.sourcePlatform || 'all';
@@ -319,7 +326,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           level: 'info',
         },
       ],
-      candidates: [],
+      candidates: previous.map(a=>({...a,projectId})),
     };
 
     setCurrentProject(initialProject);
@@ -337,12 +344,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           searchId,
           productName: params.productName,
           productUrl: params.productUrl,
-          mediaType: params.mediaType,
+          mediaType: !remainingVideos ? 'photo' : !remainingPhotos ? 'video' : params.mediaType,
           sourcePlatform,
           amazonDiscoveryBlocked:params.amazonDiscoveryBlocked,
-          sourceVideoCounts: params.sourceVideoCounts,
-      targetVideoCount: effectiveVideoTarget,
-          targetPhotoCount: effectivePhotoTarget,
+          previousMedia:previous.map(a=>a.mediaUrl), previousPosts:previous.filter(a=>a.platform==='tiktok').map(a=>a.sourceUrl),
+          sourceVideoCounts: remainingQuotas,
+      targetVideoCount: remainingVideos,
+          targetPhotoCount: remainingPhotos,
           matchImage,selectedProductUrl:params.productUrl,
           hasReferenceImage: Boolean(params.referenceImage),
           referenceImage: params.imageConfirmedLocally || effectiveExpansion ? undefined : params.referenceImage || undefined,
@@ -360,6 +368,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const decoder = new TextDecoder();
       let buffer = '';
 
+      let firstVideoRecorded=false;
       const processLine = (line: string) => {
         if (abortController.signal.aborted || activeSearchIdRef.current !== searchId) return;
         const trimmed = line.trim();
@@ -380,6 +389,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               return {
                 ...prev,
                 name: updatedName,
+                sourceStatus:evt.sourceStatus?{...prev.sourceStatus,[evt.source]:evt.sourceStatus}:prev.sourceStatus,
                 counters: {
                   ...prev.counters,
                   sourcesInspected: evt.pagesInspected ?? prev.counters.sourcesInspected,
@@ -398,6 +408,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else if (evt.type === 'result' && evt.asset) {
             const a = evt.asset;
             if (a.searchId && a.searchId !== searchId) return;
+            if(a.mediaType==='video'&&!firstVideoRecorded){sessionMetrics.firstVideoMs+=Date.now()-Date.parse(initialProject.createdAt);sessionMetrics.videoSearches++;firstVideoRecorded=true;}
             const isTikTokAsset = a.platform === 'tiktok';
             const newCandidate: CandidateAsset = {
               id: a.id,
@@ -644,6 +655,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const downloadWithSession = async (url: string, fallbackFilename: string): Promise<boolean> => {
+    sessionMetrics.downloadAttempts++;
     const result = await fetchMediaBlob(url, false);
     if (!result || result.blob.size === 0) {
       return false;
@@ -657,6 +669,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
+    sessionMetrics.downloadsReady++;
     document.body.removeChild(a);
 
     setTimeout(() => {

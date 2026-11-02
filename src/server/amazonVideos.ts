@@ -30,6 +30,7 @@ export interface ExtractedAmazonVideo {
 }
 
 interface AsinVideoCacheEntry {
+  resumePage?:number;
   asin: string;
   videos: ExtractedAmazonVideo[];
   isNegative: boolean;
@@ -349,7 +350,7 @@ export function parseAmazonUsVideosFromHtml(
 export async function fetchAmazonUsProductVideos(
   productUrlOrAsin: string,
   signal?: AbortSignal,
-  options: {limit?:number; excludeStreamUuids?:Set<string>; shouldStop?:()=>boolean; onVideo?:(video:ExtractedAmazonVideo)=>void; onLimited?:(reason:string)=>void; fetchHtml?:typeof fetchAmazonHtml} = {}
+  options: {resume?:boolean;limit?:number; excludeStreamUuids?:Set<string>; shouldStop?:()=>boolean; onVideo?:(video:ExtractedAmazonVideo)=>void; onLimited?:(reason:string)=>void; fetchHtml?:typeof fetchAmazonHtml} = {}
 ): Promise<ExtractedAmazonVideo[]> {
   const asin = extractAsinFromUrl(productUrlOrAsin) || productUrlOrAsin.trim().toUpperCase();
   const isAsinValid = /^[B0-9][A-Z0-9]{9}$/.test(asin);
@@ -369,8 +370,9 @@ export async function fetchAmazonUsProductVideos(
   }
 
   const dpUrl = isAsinValid ? `https://www.amazon.com/dp/${asin}` : productUrlOrAsin;
+  let resumePage=options.resume&&cached&&cached.expiresAt>now?cached.resumePage||1:1;
   const reviewsMediaUrl = isAsinValid
-    ? `https://www.amazon.com/product-reviews/${asin}?mediaType=media_reviews_only`
+    ? `https://www.amazon.com/product-reviews/${asin}?mediaType=media_reviews_only${resumePage>1?'&pageNumber='+resumePage:''}`
     : null;
 
   let limited=false;
@@ -437,6 +439,8 @@ export async function fetchAmazonUsProductVideos(
     if (!next) break;
     if (visited.has(next)) { exhausted=false; report('كررت أمازون نفس صفحة المراجعات.'); break; }
     visited.add(next); exhausted=false;
+    resumePage=Number(new URL(next).searchParams.get('pageNumber'))||resumePage;
+
     try {
       html = await fetchHtml(next,{signal,timeoutMs:8000,minHtmlChars:2500,referer:dpUrl});
       const videos = parseAmazonUsVideosFromHtml(html,dpUrl);
@@ -469,7 +473,7 @@ export async function fetchAmazonUsProductVideos(
       isNegative: merged.length === 0,
       cachedAt: now,
       expiresAt: now + ASIN_CACHE_TTL_MS,
-      exhausted:exhausted&&!limited,
+      resumePage,exhausted:exhausted&&!limited,
     });
     saveAsinCacheToDisk();
   }

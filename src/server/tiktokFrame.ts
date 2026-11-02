@@ -3,7 +3,7 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 
-export async function tikTokFrame(raw:string|undefined,signal:AbortSignal){
+export async function tikTokFrame(raw:string|undefined,signal:AbortSignal,seconds=1){
   let url:URL;try{url=new URL(raw||'');}catch{return null;}
   if(url.protocol!=='https:'||url.username||url.password||url.port||
     !/(^|\.)(tiktokcdn(?:-us|-eu)?\.com|tiktokv\.com)$/.test(url.hostname))return null;
@@ -25,7 +25,7 @@ export async function tikTokFrame(raw:string|undefined,signal:AbortSignal){
     await writeFile(file,Buffer.concat(chunks));
     const jpg=await new Promise<Buffer>((resolve,reject)=>{
       const output:Buffer[]=[];
-      const child=spawn('ffmpeg',['-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',file,'-ss','1','-frames:v','1','-vf','scale=480:-2','-f','image2pipe','-vcodec','mjpeg','pipe:1'],{windowsHide:true,signal:bounded});
+      const child=spawn('ffmpeg',['-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',file,'-ss',String(seconds),'-frames:v','1','-vf','scale=480:-2','-f','image2pipe','-vcodec','mjpeg','pipe:1'],{windowsHide:true,signal:bounded});
       child.stdout.on('data',chunk=>output.push(chunk));
       child.stderr.resume();child.on('error',reject);
       child.on('close',code=>code===0?resolve(Buffer.concat(output)):reject(Error('Frame unavailable')));

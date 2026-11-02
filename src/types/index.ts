@@ -147,6 +147,7 @@ export interface Project {
     fileName: string;
   }[];
   mediaTypeRequested: MediaType;
+  sourceStatus?:Record<string,string>;
   sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
   targetPhotoCount: number;

@@ -1,3 +1,4 @@
+import {sessionMetrics} from '../utils/sessionMetrics.ts';
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext.tsx';
 import { Project } from '../types/index.ts';
@@ -90,6 +91,7 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
           : 'amazon';
       showToast('تمت إعادة تشغيل البحث بالعدد المطلوب', 'success');
       await startStreamingSearch({
+        previousAssets:project.jobState==='completed_partial'?project.candidates:undefined,
         productName: project.userNotes || project.name,
         productUrl: project.productListingUrl,
         mediaType: project.mediaTypeRequested,
@@ -197,6 +199,7 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
             <h1 className="text-sm sm:text-base font-bold text-[#181B1A] truncate">
               {project.name}
             </h1>
+            {project.productListingUrl && <small className="text-[#247C72]">المنتج المثبّت · {project.productListingUrl.match(/(?:dp|product)\/([A-Z0-9]{10})/i)?.[1]||'الصفحة المختارة'}</small>}
 
             {/* Single-line progress summary */}
             <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-[#616764]">
@@ -253,7 +256,7 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#E2E5DF] bg-[#FAFBF9] hover:bg-[#F6F7F4] text-[#181B1A] text-xs font-semibold transition-colors cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>تحديث</span>
+              <span>{project.jobState==='completed_partial'?'كمّل البحث عن الناقص':'تحديث'}</span>
             </button>
           )}
 
@@ -270,6 +273,7 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
       {/* Collapsible Details Section */}
       {showDetails && (
         <div className="border-t border-[#E2E5DF] bg-[#FAFBF9] p-4 space-y-3 text-xs">
+          {(sessionMetrics.videoSearches>0||sessionMetrics.downloadAttempts>0)&&<p>أداء الجلسة · متوسط وقت أول فيديو {sessionMetrics.videoSearches?Math.round(sessionMetrics.firstVideoMs/sessionMetrics.videoSearches/1000)+' ث':'—'} · التنزيلات الجاهزة {sessionMetrics.downloadsReady}/{sessionMetrics.downloadAttempts}</p>}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
               {(project.mediaTypeRequested === 'video' || project.mediaTypeRequested === 'both') && (

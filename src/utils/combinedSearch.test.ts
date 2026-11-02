@@ -68,3 +68,20 @@ test('unavailable Amazon identity keeps its quota empty and still requests the T
   assert.equal(events.at(-1).foundCount,1);
   assert.match(events.at(-1).reasonIfPartial,/أمازون/);
 });
+
+test('explicit source requests overlap and each retains its quota',async()=>{
+ let release!:()=>void;
+ const gate=new Promise<void>(resolve=>release=resolve);
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),1500);
+ try{
+  const response=combinedSearch({signal:controller.signal,body:JSON.stringify({...body,sourceVideoCounts:{amazon:1,tiktok:1}})},async(_,init)=>{
+    const req=JSON.parse(String(init?.body));
+    if(req.sourcePlatform==='amazon')await Promise.race([gate,new Promise((_,reject)=>controller.signal.addEventListener('abort',reject,{once:true}))]);
+    else release();
+    return new Response(JSON.stringify({type:'result',asset:{platform:req.sourcePlatform,mediaType:'video',mediaUrl:'https://example.com/'+req.sourcePlatform}}));
+  });
+  const events=(await response.text()).trim().split('\n').map(line=>JSON.parse(line));
+  assert.equal(events.at(-1).foundCount,2);
+ }finally{clearTimeout(timer);}
+});

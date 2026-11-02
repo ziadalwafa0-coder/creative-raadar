@@ -4,7 +4,7 @@ import {searchFreeTikTok} from '../server/tiktokFreeSearch.ts';
 // after the authenticated server stream ends short, without sending credentials.
 export async function recoverTikTokStream(response:Response, options:RequestInit):Promise<Response>{
   if(!response.ok)return response;
-  const {searchId,productName,targetVideoCount,matchImage,selectedProductUrl}=JSON.parse(String(options.body));
+  const {searchId,productName,targetVideoCount,matchImage,selectedProductUrl,previousPosts=[]}=JSON.parse(String(options.body));
   const target=Math.max(1,Math.min(500,Number(targetVideoCount)||10));
   const signal=options.signal||new AbortController().signal;
   const original=await response.text();
@@ -13,12 +13,12 @@ export async function recoverTikTokStream(response:Response, options:RequestInit
   const reply=(body:string)=>new Response(body,{headers:{'Content-Type':'application/x-ndjson'}});
   if(seen.size>=target)return reply(original);
   try{
-    const items=await searchFreeTikTok(productName,Math.min(500,target+6),signal,(url,init)=>fetch(url,{
+    const items=await searchFreeTikTok(productName,Math.min(500,target+6+previousPosts.length),signal,(url,init)=>fetch(url,{
       ...init,credentials:'omit',referrerPolicy:'no-referrer'
     }));
     const recovered=[];
     for(let offset=0;offset<items.length && seen.size<target;offset+=10){
-      const batch=items.slice(offset,offset+10).filter(item=>!seen.has(item.source));
+      const batch=items.slice(offset,offset+10).filter(item=>!seen.has(item.source)&&!previousPosts.includes(item.source));
       if(!batch.length)continue;
       const check=await fetch('/api/tiktok/matches',{method:'POST',headers:options.headers,signal,
         body:JSON.stringify({productName,matchImage,selectedProductUrl,items:batch.map(({source,title,thumbnailUrl,url})=>({source,title,thumbnailUrl,url}))})});

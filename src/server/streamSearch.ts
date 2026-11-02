@@ -35,7 +35,7 @@ import {
   type AmazonUsProductCandidate,
 } from './amazonSearch.ts';
 import {
-  fetchAmazonUsProductVideos,
+  extractStreamUuid,fetchAmazonUsProductVideos,
   parseAmazonUsVideosFromHtml,
   type ExtractedAmazonVideo,
 } from './amazonVideos.ts';
@@ -422,15 +422,16 @@ export async function handleStreamSearch(
       ? req.body.searchId.trim()
       : crypto.randomUUID();
 
+  const lane=ownerId+':'+(req.body.sourcePlatform==='tiktok'?'tiktok':'amazon');
   if (ownerId) {
-    const prevStream = activeOwnerStreams.get(ownerId);
+    const prevStream = activeOwnerStreams.get(lane);
     if (prevStream && prevStream.searchId !== searchId) {
       try {
         prevStream.abort();
       } catch (err) {
         console.warn('[StreamSearch] Error aborting previous stream:', (err as Error)?.message);
       }
-      activeOwnerStreams.delete(ownerId);
+      activeOwnerStreams.delete(lane);
     }
   }
 
@@ -477,7 +478,7 @@ export async function handleStreamSearch(
   };
 
   if (ownerId) {
-    activeOwnerStreams.set(ownerId, { searchId, abort: cleanupAndAbort });
+    activeOwnerStreams.set(lane, { searchId, abort: cleanupAndAbort });
   }
 
   req.on('aborted', cleanupAndAbort);
@@ -539,8 +540,9 @@ export async function handleStreamSearch(
     });
   }
 
-  const seenStreamUuids = new Set<string>();
-  const seenMediaUrls = new Set<string>();
+  const previous:string[]=Array.isArray(req.body.previousMedia)?req.body.previousMedia.slice(0,1500).filter((v:unknown)=>typeof v==='string'):[];
+  const seenStreamUuids = new Set(previous.map(extractStreamUuid));
+  const seenMediaUrls = new Set(previous.map(url=>normalizeUrl(url)));
   const seenAsins = new Set<string>();
   let foundVideos = 0;
   let foundPhotos = 0;
@@ -553,7 +555,8 @@ export async function handleStreamSearch(
   try {
     if(req.body.sourcePlatform==='tiktok'){
       if(mediaType!=='video')throw Error('بحث TikTok يدعم الفيديوهات فقط.');
-      const pool=await searchPublicTikTok(rawProductName,Math.min(500,targetVideoCount+6),abortController.signal);
+      const excluded=new Set(Array.isArray(req.body.previousPosts)?req.body.previousPosts.slice(0,500):[]);
+      const pool=(await searchPublicTikTok(rawProductName,Math.min(500,targetVideoCount+6+excluded.size),abortController.signal)).filter(item=>!excluded.has(item.source));
       const items=await filterTikTokProducts(pool,req.body,targetVideoCount,abortController.signal);
       for(const item of items){
         const timestamp=new Date().toISOString();
@@ -823,7 +826,7 @@ export async function handleStreamSearch(
         if (mediaType !== 'photo' && foundVideos < targetVideoCount) {
           try {
             const videos = await fetchAmazonUsProductVideos(page.url, abortController.signal, {
-              limit:targetVideoCount-foundVideos,
+              resume:previous.length>0,limit:targetVideoCount-foundVideos,
               excludeStreamUuids:seenStreamUuids, shouldStop:isGoalReached,
               onVideo:video=>emitVideo(video,page,titleVerdict),
               onLimited:reason=>{reviewLimits.add(reason);},
@@ -1043,9 +1046,9 @@ export async function handleStreamSearch(
   } finally {
     clearTimeout(timeoutId);
     if (ownerId) {
-      const current = activeOwnerStreams.get(ownerId);
+      const current = activeOwnerStreams.get(lane);
       if (current && current.searchId === searchId) {
-        activeOwnerStreams.delete(ownerId);
+        activeOwnerStreams.delete(lane);
       }
     }
     if (!res.writableEnded) {
@@ -1447,14 +1450,14 @@ export function handlePrepareExportZip(req: Request, res: Response, ownerId: str
       reviewerOrChannel: a.reviewerOrChannel ? String(a.reviewerOrChannel) : 'عميل أمازون',
       reviewId: a.reviewId ? String(a.reviewId) : undefined,
       mediaType: a.mediaType === 'photo' ? 'photo' : 'video',
-      platform: 'amazon',
+      platform: a.platform==='tiktok'?'tiktok':'amazon',
       durationSeconds: typeof a.durationSeconds === 'number' ? a.durationSeconds : undefined,
       provenance: String(a.provenance || 'unverified_customer_review'),
-      sentiment: 'positive',
+      sentiment: a.sentiment==='positive'||a.sentiment==='negative'?a.sentiment:'neutral',
       matchCategory: a.matchCategory === 'permitted_variation' ? 'permitted_variation' : 'exact_design',
       matchScore: typeof a.matchScore === 'number' ? a.matchScore : 92,
       userFacingMatchLabel: String(a.userFacingMatchLabel || 'مطابق للمنتج'),
-      isCustomerReview: true,
+      isCustomerReview: a.platform!=='tiktok',
       collectedAt: String(a.collectedAt || new Date().toISOString()),
     }));
 
@@ -1500,7 +1503,7 @@ export async function handleStreamExportZip(
   }
 
   // Fallback to the latest search belonging to ownerId if exact searchId wasn't found
-  if (!rec && ownerId) {
+  if (!rec && !rawSearchId && ownerId) {
     let newest: RecentStreamSearchRecord | undefined;
     for (const candidate of recentSearchResults.values()) {
       if (candidate.ownerId === ownerId && candidate.assets.length > 0) {
