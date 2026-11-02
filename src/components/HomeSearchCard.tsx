@@ -32,6 +32,7 @@ export const HomeSearchCard: React.FC = () => {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [commercialName, setCommercialName] = useState('');
   const [autoListing,setAutoListing]=useState<IdentityCandidate|null>(null);
+  const [similarReviews,setSimilarReviews]=useState(false);
   const [allowSimilar,setAllowSimilar]=useState(false);
   const [scanProgress, setScanProgress] = useState('');
   const [isScanning, setIsScanning] = useState(false);
@@ -248,7 +249,7 @@ export const HomeSearchCard: React.FC = () => {
         productName: selectedTitle,
         productUrl: selectedUrl || undefined,
         mediaType,
-        sourcePlatform: platform, sourceVideoCounts,
+        sourcePlatform: platform, similarReviews, sourceVideoCounts,
         targetVideoCount: safeVideoCount,
         targetPhotoCount: safePhotoCount,
         referenceImage: selectedImage,
@@ -383,7 +384,7 @@ export const HomeSearchCard: React.FC = () => {
                   setIsSubmitting(true); setValidationError(null);
                   try {
                     await startStreamingSearch({ productName: candidate.title, productUrl: candidate.url,
-                      mediaType, sourcePlatform: platform, sourceVideoCounts, targetVideoCount: videoTarget, targetPhotoCount: clampCount(targetPhotoInput),
+                      mediaType, sourcePlatform: platform, similarReviews, sourceVideoCounts, targetVideoCount: videoTarget, targetPhotoCount: clampCount(targetPhotoInput),
                       referenceImage: candidate.image, imageConfirmedLocally: true,
                       verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:commercialName.trim(),profile:cloudProfileRef.current} : undefined });
                   } catch (error) { setValidationError(error instanceof Error ? error.message : 'تعذر بدء البحث.'); }
@@ -468,6 +469,7 @@ export const HomeSearchCard: React.FC = () => {
             if(next==='tiktok')setMediaType('video');
           }}><option value="amazon">أمازون · ريفيوهات العملاء فقط</option><option value="tiktok">تيك توك · كل فيديوهات المنتج</option><option value="all">Amazon + TikTok</option></select>
         </label>
+        {platform!=='tiktok' && mediaType!=='photo' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={similarReviews} onChange={e=>setSimilarReviews(e.target.checked)}/>لو ملقيناش فيديوهات عملاء للمنتج، اعرض ريفيوهات لتصميم بتشابه بصري تقديري ٩٠٪ أو أعلى</label>}
         {platform!=='amazon' && <p className="text-xs text-[#616764]">{platform==='all'?'أمازون: مراجعات العملاء فقط. ':''}تيك توك: مراجعات وعروض وشرح استخدام لنفس المنتج.</p>}
         {platform==='amazon' && <p className="text-xs text-[#616764]">العدد المطلوب هدف للبحث. لو المراجعات أقل، هنعرض المتاح من العملاء فقط.</p>}
         <div>

@@ -1,3 +1,5 @@
+import {collectVerifiedListings} from './verifiedCollection.ts';
+import {fetchProductImageAsBase64} from './amazonHttp.ts';
 import {selectedAmazonListing} from './productScope.ts';
 import type { Request, Response } from 'express';
 import crypto from 'node:crypto';
@@ -982,6 +984,26 @@ export async function handleStreamSearch(
     const workers = Array.from({ length: WORKER_CONCURRENCY }, () => runWorker());
     await Promise.all([runProducer(), ...workers]);
 
+    if(req.body.similarReviews===true && !req.body.hadOriginalVideos && targetVideoCount>0 && foundVideos===0 && resolvedLinkIdentity?.directAmazonUsUrl){
+      const signal=abortController.signal;
+      const progress=(message:string)=>sendEvent({type:'progress',searchId,message,foundCount:foundVideos+foundPhotos,timestamp:new Date().toISOString()});
+      progress('لم نجد فيديوهات متاحة للصفحة المختارة. نتحقق من صور المنتجات البديلة.');
+      try{
+        const image=await fetchProductImageAsBase64(resolvedLinkIdentity.imageUrl,signal);
+        const referenceImage=image?'data:'+image.mimeType+';base64,'+image.base64:req.body.verifiedExpansion?.referenceImage||rawReferenceImage;
+        const query=req.body.verifiedExpansion?.profile?.commercialNameEn||resolvedLinkIdentity.canonicalSearchQuery;
+        const stop=()=>foundVideos>=targetVideoCount||signal.aborted;
+        for await(const batch of collectVerifiedListings({query,referenceImage},rawProductName,seenAsins,signal,progress,stop)){
+          for(const {page,verdict} of batch){
+            if(stop())break;
+            if(verdict.matchScore<90||!verdict.approved)continue;
+            const match={...verdict,matchCategory:'permitted_variation' as const,userFacingLabelAr:'منتج بديل · تشابه بصري تقديري '+verdict.matchScore+'٪'};
+            try{await fetchAmazonUsProductVideos(page.url,signal,{limit:targetVideoCount-foundVideos,excludeStreamUuids:seenStreamUuids,shouldStop:stop,onVideo:v=>emitVideo(v,page,match)});}
+            catch{signal.throwIfAborted();}
+          }
+        }
+      }catch{signal.throwIfAborted();progress('تعذّر التحقق من المزيد من البدائل.');}
+    }
     const totalFound = foundVideos + foundPhotos;
     let reasonIfPartial: string | undefined;
 

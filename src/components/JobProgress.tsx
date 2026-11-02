@@ -101,7 +101,7 @@ export const JobProgress: React.FC<Props> = ({ project, onOpenManualModal }) => 
         targetPhotoCount: parsedPh,
         referenceImage: project.referenceImages?.[0]?.url,
         imageConfirmedLocally: Boolean(project.verifiedExpansion),
-        verifiedExpansion: project.verifiedExpansion,
+        similarReviews:project.similarReviews,verifiedExpansion: project.verifiedExpansion,
       });
       return;
     }

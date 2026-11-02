@@ -133,6 +133,7 @@ export const AssetCard: React.FC<Props> = ({ asset, onPreview }) => {
             >
               {isTikTok ? 'تيك توك • TikTok' : 'أمازون • Amazon'}
             </span>
+            {asset.userFacingMatchLabel?.startsWith('منتج بديل') && <strong className="rounded-md bg-amber-100 px-2 text-xs text-amber-900">{asset.userFacingMatchLabel}</strong>}
             {isVideo && <span title={asset.reviewStars ? 'من نجوم مراجعة العميل' : 'تقدير من عنوان الفيديو أو وصفه'} className={'rounded-md px-2 py-0.5 text-[10px] font-semibold '+(tone==='إيجابي'?'bg-green-50 text-green-800':tone==='سلبي'?'bg-red-50 text-red-800':'bg-gray-100 text-gray-700')}>{tone}</span>}
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${provInfo.badge}`}>
               {provInfo.label}

@@ -49,6 +49,7 @@ interface AppContextType {
     targetPhotoCount: number;
     referenceImage?: string | null;
     imageConfirmedLocally?: boolean;
+    similarReviews?:boolean;
     verifiedExpansion?: Project['verifiedExpansion'];
   }) => Promise<void>;
   cancelStreamingSearch: () => void;
@@ -228,6 +229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     targetPhotoCount: number;
     referenceImage?: string | null;
     imageConfirmedLocally?: boolean;
+    similarReviews?:boolean;
     verifiedExpansion?: Project['verifiedExpansion'];
   }) => {
     // 1. Cancel any previous streaming search and clear previous results
@@ -283,7 +285,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ]
         : [],
       mediaTypeRequested: params.mediaType,
-      verifiedExpansion: params.verifiedExpansion,
+      similarReviews:params.similarReviews,verifiedExpansion: params.verifiedExpansion,
       sourceVideoCounts: params.sourceVideoCounts,
       targetVideoCount: effectiveVideoTarget,
       targetPhotoCount: effectivePhotoTarget,
@@ -354,6 +356,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           matchImage,selectedProductUrl:params.productUrl,
           hasReferenceImage: Boolean(params.referenceImage),
           referenceImage: params.imageConfirmedLocally || effectiveExpansion ? undefined : params.referenceImage || undefined,
+          similarReviews:params.similarReviews,hadOriginalVideos:previous.some(a=>a.platform==='amazon'&&a.mediaType==='video'&&!a.userFacingMatchLabel?.startsWith('منتج بديل')),
           verifiedExpansion: effectiveExpansion,
         }),
       });

@@ -133,6 +133,7 @@ export interface JobProgressCounters {
 
 export interface Project {
   /** Transient input for refreshing an image-verified collection; not persisted by the stream API. */
+  similarReviews?:boolean;
   verifiedExpansion?: {referenceImage:string; query:string; profile:VisualAttribute};
   id: string;
   sessionId?: string;

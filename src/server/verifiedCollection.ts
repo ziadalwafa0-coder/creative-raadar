@@ -16,8 +16,8 @@ export async function* collectVerifiedListings(input:unknown, name:string, exclu
   const query=typeof data.query==='string' ? data.query.trim().slice(0,160) : '';
   if (!reference || !/[a-z]{3}/i.test(query) || /[\u0600-\u06ff]/.test(query)) return;
   let profile;
-  try { profile=normalizeProductProfile(data.profile); } catch { return; }
-  if (profile.confidence==='low') return;
+  if(data.profile){try { profile=normalizeProductProfile(data.profile); } catch { return; }}
+  if (profile?.confidence==='low') return;
   const seen=new Set(excluded);
   const deadline=AbortSignal.any([signal,AbortSignal.timeout(90_000)]);
   for(let pageNumber=1;pageNumber<=3;pageNumber++) {
