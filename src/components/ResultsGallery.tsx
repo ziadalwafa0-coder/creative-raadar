@@ -218,13 +218,13 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
           </button>;
         })}
       </div>}
-      {!!candidates.length && <label className="text-sm">تقييم الفيديو <select value={tone} onChange={e=>setTone(e.target.value)}>
-        {['','إيجابي','سلبي','مختلط','محايد','غير واضح'].map(t=><option key={t} value={t}>{t||'الكل'}</option>)}</select></label>}
+      {!!candidates.length && <label className="radaar-filters">تقييم الفيديو <select className="radaar-select" value={tone} onChange={e=>setTone(e.target.value)}>
+        {['','إيجابي','سلبي','مختلط','محايد','غير واضح'].map(t=><option key={t} value={t}>{t||'الكل'}</option>)}</select><span>{visible.length} نتيجة معروضة</span></label>}
       {/* Results Grid */}
       {visible.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {visible.map((asset) => (
-            <div key={asset.id}>{isEphemeralProject && <label className="text-sm"><input type="checkbox" checked={selected.has(asset.id)}
+            <div key={asset.id}>{isEphemeralProject && <label className="radaar-pick"><input type="checkbox" checked={selected.has(asset.id)}
               onChange={()=>setSelected(old=>{const next=new Set(old);if(next.has(asset.id))next.delete(asset.id);else next.add(asset.id);return next;})}/> اختيار للتنزيل</label>}
             <AssetCard
               asset={asset}
@@ -238,10 +238,10 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
             <FolderOpen className="w-5 h-5" />
           </div>
           <h4 className="font-bold text-[#181B1A] text-sm mb-1">
-            {terminalMessage ? 'لم يتم جلب نتائج مطابقة' : 'لا توجد نتائج متاحة حتى الآن'}
+            {tone ? 'مفيش نتائج بالتقييم ده' : terminalMessage ? 'لم يتم جلب نتائج مطابقة' : 'لا توجد نتائج متاحة حتى الآن'}
           </h4>
           <p className="text-xs text-[#616764] max-w-sm mx-auto">
-            {showTabs ? 'لم تصل نتائج من هذا المصدر حتى الآن.' : terminalMessage || 'تظهر الفيديوهات والصور هنا فور اكتمال استخراجها، أو يمكنك فتح التفاصيل لإضافة رابط مباشر.'}
+            {tone ? <button className="underline text-[#247C72]" onClick={()=>setTone('')}>عرض كل التقييمات</button> : showTabs ? 'لم تصل نتائج من هذا المصدر حتى الآن.' : terminalMessage || 'تظهر الفيديوهات والصور هنا فور اكتمال استخراجها، أو يمكنك فتح التفاصيل لإضافة رابط مباشر.'}
           </p>
         </div>
       )}

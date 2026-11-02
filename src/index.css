@@ -58,3 +58,14 @@
 @keyframes radaar-appear {from {opacity:.25;translate:0 5px}to {opacity:1;translate:0 0}}
 @keyframes radaar-sweep {from {transform:rotate(-150deg)}to {transform:rotate(65deg)}}
 @keyframes radaar-pulse {50% {opacity:.35}}
+
+.radaar-step {display:flex;align-items:center;gap:.65rem;color:#183f38;font-size:1.1rem;font-weight:750}
+.radaar-step b {display:grid;place-items:center;width:1.85rem;height:1.85rem;border-radius:.65rem;background:#e7f3ec;color:#286753}
+.radaar-options {border:1px solid #dae5df;border-radius:.85rem;padding:.65rem .9rem;background:#fafcfb}
+.radaar-options summary {cursor:pointer;font-size:.85rem;font-weight:650;color:#285e52;padding:.25rem}
+.radaar-options[open] summary {margin-bottom:.8rem}
+.radaar-select {min-height:44px;border:1px solid #cfddd5;background:#fff;border-radius:.75rem;padding:.45rem .8rem;color:#203f37}
+.radaar-filters {display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;font-size:.8rem}
+.radaar-filters span {margin-inline-start:auto;color:#52655e}
+.radaar-pick {display:inline-flex;align-items:center;min-height:36px;gap:.45rem;font-size:.8rem;cursor:pointer}
+.radaar-shell input[type=checkbox] {accent-color:#247c72}

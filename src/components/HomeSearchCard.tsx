@@ -231,6 +231,7 @@ export const HomeSearchCard: React.FC = () => {
               referenceImage:imagePreview});
             return;
           }
+          document.getElementById('product-link-options')?.setAttribute('open','');
           document.getElementById('product-url-input')?.focus();
           throw new Error('تعذّر العثور على صفحة مؤكدة من البحث. الصق رابط نفس المنتج من أمازون في خانة الرابط المباشر واضغط ابدأ البحث.');
         }
@@ -286,6 +287,33 @@ export const HomeSearchCard: React.FC = () => {
         onSubmit={handleSubmit}
         className="radaar-panel bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-5 sm:p-7 space-y-5"
       >
+        <h2 className="radaar-step"><b aria-hidden="true">١</b> حدّد المنتج</h2>
+        <div>
+          <label
+            htmlFor="product-name-input"
+            className="block text-sm font-semibold text-[#181B1A] mb-2"
+          >
+            اسم المنتج
+          </label>
+          <input
+            id="product-name-input"
+            type="text"
+            value={productName}
+            onChange={(e) => {
+              identityRequestRef.current?.abort();
+              setProductName(e.target.value);
+              setIdentityCandidates([]);
+              visionController.current?.abort();
+              cloudProfileRef.current=null;
+              setCommercialName('');
+              setAutoListing(null);
+              if (validationError) setValidationError(null);
+            }}
+            placeholder="أدخل اسم المنتج (مثال: جزامة 9 دور بغطاء)..."
+            className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
+          />
+        </div>
+
         {/* 1) Large Drag/Drop Product Image Box */}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
@@ -376,7 +404,7 @@ export const HomeSearchCard: React.FC = () => {
             {autoListing && <a href={autoListing.url} target="_blank" rel="noopener noreferrer" className="text-xs underline text-[#247C72]">عرض صفحة المنتج المطابق على أمازون</a>}
             <p data-scanning={isScanning} role="status"  className="text-xs text-[#247C72]">{scanProgress}</p>
 
-            <p className="text-xs text-[#616764]">Gemini يستقبل نسخة مصغرة للتحليل عند تفعيله. الموقع لا يحفظ صورة التحليل على السيرفر. البديل المحلي المجاني ينزّل نموذجًا أول مرة؛ الاسم المقترح لا يثبت الماركة أو الموديل.</p>
+            <p className="text-xs text-[#616764]">بنستخدم نسخة مصغّرة من الصورة لمقارنة التصميم. تقدر تعدّل الاسم لو النتيجة محتاجة توضيح.</p>
           </div>
         )}
         {identityCandidates.length > 0 && (
@@ -400,34 +428,8 @@ export const HomeSearchCard: React.FC = () => {
             </div>
           </section>
         )}
-        <div>
-          <label
-            htmlFor="product-name-input"
-            className="block text-sm font-semibold text-[#181B1A] mb-2"
-          >
-            اسم المنتج
-          </label>
-          <input
-            id="product-name-input"
-            type="text"
-            value={productName}
-            onChange={(e) => {
-              identityRequestRef.current?.abort();
-              setProductName(e.target.value);
-              setIdentityCandidates([]);
-              visionController.current?.abort();
-              cloudProfileRef.current=null;
-              setCommercialName('');
-              setAutoListing(null);
-              if (validationError) setValidationError(null);
-            }}
-            placeholder="أدخل اسم المنتج (مثال: جزامة 9 دور بغطاء)..."
-            className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
-          />
-        </div>
-
         {/* 2b) Direct Product Page Link right under Product Name */}
-        <div>
+        <details className="radaar-options" id="product-link-options"><summary>عندي رابط المنتج على أمازون</summary>
           <div className="flex items-center justify-between gap-2 mb-2">
             <label
               htmlFor="product-url-input"
@@ -466,11 +468,12 @@ export const HomeSearchCard: React.FC = () => {
           <p className="text-[11px] text-[#616764] mt-1.5">
             عند تحديد رابط، نجمع مراجعات أمازون من صفحة المنتج المحددة فقط.
           </p>
-        </div>
+        </details>
 
         {/* 3) Media Type Selector (فيديوهات / صور / الاثنين) */}
+        <h2 className="radaar-step"><b aria-hidden="true">٢</b> اختَر النتائج</h2>
         <label className="block text-sm font-semibold">المصدر
-          <select value={platform} className="block mt-2 p-2 border rounded-lg" onChange={e=>{
+          <select value={platform} className="radaar-select block mt-2 w-full" onChange={e=>{
             const next=e.target.value==='tiktok'?'tiktok':e.target.value==='all'?'all':'amazon';setPlatform(next);setIdentityCandidates([]);
             if(next==='tiktok')setMediaType('video');
           }}><option value="amazon">أمازون · ريفيوهات العملاء فقط</option><option value="tiktok">تيك توك · كل فيديوهات المنتج</option><option value="all">Amazon + TikTok</option></select>
