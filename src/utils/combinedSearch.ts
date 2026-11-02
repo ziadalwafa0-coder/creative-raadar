@@ -1,3 +1,4 @@
+import {videoKeys} from './videoIdentity.ts';
 type Fetcher = (input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
 
 /** Merge two server streams into the single active UI search. */
@@ -35,10 +36,10 @@ export function combinedSearch(init:RequestInit,request:Fetcher):Response {
           const event=JSON.parse(line);
           if(event.type==='result'&&event.asset){
             const asset=event.asset;
-            const key=asset.mediaType+':'+(asset.mediaType==='video'?((source==='tiktok'&&asset.sourceUrl)||asset.mediaUrl):asset.mediaUrl);
+            const keys=videoKeys(asset);
             if(asset.mediaType==='video'&&sourceVideos>=count)return;
-            if(!asset.mediaUrl||seen.has(key)||(asset.mediaType==='video'?found>=target:photos>=Number(parent.targetPhotoCount||0)))return;
-            seen.add(key);
+            if(!asset.mediaUrl||keys.some(key=>seen.has(key))||(asset.mediaType==='video'?found>=target:photos>=Number(parent.targetPhotoCount||0)))return;
+            keys.forEach(key=>seen.add(key));
             if(asset.mediaType==='video'){found++;sourceVideos++;}else photos++;
             send({...event,asset:{...asset,searchId:parent.searchId}});
           }else if(event.type==='warning'||event.type==='progress')send(event);

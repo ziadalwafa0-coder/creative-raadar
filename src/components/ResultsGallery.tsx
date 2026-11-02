@@ -56,11 +56,16 @@ export const ResultsGallery: React.FC<Props> = ({ project }) => {
         const {downloadZip}=await import('client-zip');
         const manifest:Array<{file:string;source:string}>=[];
         const failed=new Set<string>();
+        const hashes=new Set<string>();
         async function* files(){
           for(const asset of candidates.filter(a=>selected.has(a.id))){
             const url=asset.downloadUrl||asset.mediaUrl;
             const file=url&&await fetchMediaBlob('/api/stream-search/download?'+new URLSearchParams({url,type:asset.mediaType}),true);
             if(!file || !file.blob.size){failed.add(asset.id);continue;}
+            const digest=await crypto.subtle.digest('SHA-256',await file.blob.arrayBuffer());
+            const hash=Array.from(new Uint8Array(digest)).join(',');
+            if(hashes.has(hash))continue;
+            hashes.add(hash);
             const name=(manifest.length+1)+'-'+asset.platform+(asset.mediaType==='video'?'.mp4':'.jpg');
             manifest.push({file:name,source:asset.sourceUrl});
             yield {name,input:file.blob};

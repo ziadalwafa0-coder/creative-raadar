@@ -1,3 +1,4 @@
+import {videoKeys} from '../utils/videoIdentity.ts';
 import {sessionMetrics} from '../utils/sessionMetrics.ts';
 import {recoverTikTokStream} from '../utils/recoverTikTokStream.ts';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
@@ -451,7 +452,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             setCurrentProject((prev) => {
               if (!prev || prev.id !== projectId) return prev;
-              if (prev.candidates.some((c) => c.id === newCandidate.id || c.mediaUrl === newCandidate.mediaUrl)) {
+              const keys=new Set(videoKeys(newCandidate));
+              if (prev.candidates.some((c) => c.id === newCandidate.id || videoKeys(c).some(key=>keys.has(key)))) {
                 return prev;
               }
               const nextCandidates = [...prev.candidates, newCandidate];

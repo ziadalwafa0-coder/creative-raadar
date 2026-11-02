@@ -1,6 +1,6 @@
 import {fetchAmazonSearchPage} from './amazonSearch.ts';
 import {AmazonBlockError,fetchProductImageAsBase64} from './amazonHttp.ts';
-import {isGeminiConfigured,verifyAmazonProductsBatchVisually} from './gemini.ts';
+import {translateArabicToAmazonQueries,isGeminiConfigured,verifyAmazonProductsBatchVisually} from './gemini.ts';
 import {evaluateStrictProductTitleMatch} from './queryBuilder.ts';
 import {normalizeProductProfile,parseReferenceImage} from './productProfile.ts';
 import type {VisualAttribute} from '../types/index.ts';
@@ -8,9 +8,13 @@ import type {VisualAttribute} from '../types/index.ts';
 export const identityServices={search:fetchAmazonSearchPage,picture:fetchProductImageAsBase64,verify:verifyAmazonProductsBatchVisually,ready:isGeminiConfigured};
 export function identitySearchPlan(query:string,profile?:VisualAttribute) {
   const normalize=(text:string)=>text.toLowerCase().replace(/\s+/g,' ').trim();
-  const alternate=[profile?.commercialNameEn,profile?.suggestedNameEn,...(profile?.multilingualQueries?.en || [])]
-    .find(text=>text && /[a-z]{3}/i.test(text) && !/[\u0600-\u06ff]/.test(text) && normalize(text)!==normalize(query));
-  return [{query,page:1}, alternate ? {query:alternate,page:1} : {query,page:2}, {query,page:alternate ? 2 : 3}];
+  const names=[query];
+  const short=query.split(/\s+(?:for|with)\s+|[,|]/i)[0].trim().split(/\s+/).slice(0,5).join(' ');
+  for(const text of [profile?.commercialNameEn,profile?.suggestedNameEn,...(profile?.multilingualQueries?.en||[]),short]){
+    if(text && text.trim().split(/\s+/).length>=2 && /[a-z]{3}/i.test(text) && !/[\u0600-\u06ff]/.test(text) && !names.some(n=>normalize(n)===normalize(text)))names.push(text.trim());
+  }
+  return [...names.slice(0,4).map(query=>({query,page:1})),{query,page:2}];
+
 }
 
 export async function searchProductIdentity(input:Record<string,any>,signal:AbortSignal,dependencies=identityServices) {
@@ -25,7 +29,18 @@ export async function searchProductIdentity(input:Record<string,any>,signal:Abor
   if(cloud && profile?.confidence==='low' && input.allowSimilar!==true) { diagnostics.reason='REFERENCE_UNCERTAIN'; return finish('gemini'); }
   const seen=new Set<string>();
   const blockedQueries=new Set<string>();
-  for(const plan of identitySearchPlan(query,profile)) {
+  const plans=identitySearchPlan(query,profile);
+  let reformulated=false;
+  for(let i=0;i<plans.length;i++){
+    let plan=plans[i];
+    if(plan.page===2&&!reformulated){
+      reformulated=true;
+      const alternatives=await translateArabicToAmazonQueries(query,signal);
+      signal.throwIfAborted();
+      const fresh=[alternatives?.primaryQuery,alternatives?.secondaryQuery].filter((q):q is string=>!!q&&!plans.some(p=>p.query.toLowerCase()===q.toLowerCase()));
+      plans.splice(i,0,...[...new Set(fresh)].map(query=>({query,page:1})));
+      plan=plans[i];
+    }
     signal.throwIfAborted();
     if(blockedQueries.has(plan.query))continue;
     diagnostics.queriesTried.push(`${plan.query} (page ${plan.page})`);

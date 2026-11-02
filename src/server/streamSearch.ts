@@ -1587,6 +1587,7 @@ export async function handleStreamExportZip(
     'Title',
     'Download URL',
   ];
+  const exportedHashes=new Set<string>();
   const csvRows: string[] = [csvHeaders.map(sanitizeCsvField).join(',')];
 
   const concurrency = 5;
@@ -1616,7 +1617,7 @@ export async function handleStreamExportZip(
               (asset.mediaType === 'video' ? 'mp4' : 'jpg');
             return {
               asset,
-              fileInfo: { localFilePath: dlRes.localFilePath, ext },
+              fileInfo: { localFilePath: dlRes.localFilePath, ext, sha256:dlRes.sha256 },
             };
           }
         } catch (err) {
@@ -1630,6 +1631,16 @@ export async function handleStreamExportZip(
     );
 
     for (const { asset, fileInfo } of batchResults) {
+      if(fileInfo && asset.mediaType==='video'){
+        let digest=fileInfo.sha256;
+        if(!digest){
+          const hash=crypto.createHash('sha256');
+          for await(const bytes of fs.createReadStream(fileInfo.localFilePath))hash.update(bytes);
+          digest=hash.digest('hex');
+        }
+        if(exportedHashes.has(digest))continue;
+        exportedHashes.add(digest);
+      }
       const folder = asset.mediaType === 'photo' ? 'Photos' : 'Customer_Reviews';
       const fileName = fileInfo ? `${asset.id}_${asset.matchCategory}.${fileInfo.ext}` : '';
       if (fileInfo) {

@@ -159,6 +159,10 @@ export async function buildAmazonUsQueries(
     }
   }
 
+  if(candidates.length===1 && !hasArabic && !suggestedNameEn){
+    const aliases=await translateArabicToAmazonQueries(rawTrimmed,signal);
+    addCandidate(aliases?.primaryQuery);addCandidate(aliases?.secondaryQuery);
+  }
   // Build concise 4-word fallback variant if primary query has > 4 words
   if (candidates.length === 1) {
     const words = candidates[0].split(/\s+/);
