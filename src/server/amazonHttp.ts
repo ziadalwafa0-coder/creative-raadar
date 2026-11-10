@@ -1,7 +1,6 @@
 import { Agent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import { SCRAPER_PROXY_URL, SCRAPER_API_KEY } from './config.ts';
 import { isSafeExternalUrl } from '../utils/security.server.ts';
-import { fetchWithScrapling, isScraplingAmazonUrl, scraplingEnabled } from './scrapling.ts';
 
 /**
  * Shared undici Agent with keep-alive and connection pool for all Amazon HTTP requests.
@@ -55,38 +54,73 @@ export class AmazonNetworkError extends Error {
   }
 }
 
-const CHROME_USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+export class AmazonDeadListingError extends Error {
+  public readonly code = 'AMAZON_DEAD_LISTING';
+  public readonly status: number;
+  public readonly url: string;
+  public readonly reason: string;
+
+  constructor(url: string, status: number, reason: string) {
+    super(`Amazon dead listing (${status}) for ${url}: ${reason}`);
+    this.name = 'AmazonDeadListingError';
+    this.status = status;
+    this.url = url;
+    this.reason = reason;
+  }
+}
+
+/**
+ * Safari macOS profiles without Sec-Ch-Ua headers avoid CloudFront JA3/Client-Hints mismatch 503s.
+ */
+const BROWSER_PROFILES = [
+  {
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+    acceptLanguage: 'en-US,en;q=0.9',
+  },
+  {
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+    acceptLanguage: 'en-US,en;q=0.9',
+  },
+  {
+    userAgent:
+      'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+    acceptLanguage: 'en-US,en;q=0.9',
+  },
+  {
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+    acceptLanguage: 'en-US,en;q=0.9',
+  },
+  {
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15',
+    acceptLanguage: 'en-US,en;q=0.9',
+  },
 ] as const;
 
-export const AMAZON_CHROME_USER_AGENT = CHROME_USER_AGENTS[0];
+let profileRotationCursor = 0;
+
+export const AMAZON_CHROME_USER_AGENT = BROWSER_PROFILES[0].userAgent;
 
 export const AMAZON_US_HEADERS: Record<string, string> = {
   'User-Agent': AMAZON_CHROME_USER_AGENT,
-  Accept:
-    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
-  'Cache-Control': 'no-cache',
-  Pragma: 'no-cache',
-  'Sec-Ch-Ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-  'Sec-Ch-Ua-Mobile': '?0',
-  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Upgrade-Insecure-Requests': '1',
   'Sec-Fetch-Dest': 'document',
   'Sec-Fetch-Mode': 'navigate',
   'Sec-Fetch-Site': 'none',
   'Sec-Fetch-User': '?1',
-  'Upgrade-Insecure-Requests': '1',
 };
 
 export const AMAZON_US_PRODUCT_PAGE_HEADERS: Record<string, string> = {
   ...AMAZON_US_HEADERS,
   Referer: 'https://www.amazon.com/',
-  'Sec-Fetch-Site': 'same-origin',
 };
 
-// Lightweight per-domain Cookie Jar
+// Lightweight per-domain Cookie Jar (only stores cookies from verified 200 OK unblocked responses)
 const cookieJar = new Map<string, Map<string, string>>();
 
 function getDomainKey(urlStr: string): string {
@@ -99,7 +133,10 @@ function getDomainKey(urlStr: string): string {
   }
 }
 
-function storeResponseCookies(urlStr: string, headers: { getSetCookie?: () => string[]; get: (k: string) => string | null }): void {
+function storeResponseCookies(
+  urlStr: string,
+  headers: { getSetCookie?: () => string[]; get: (k: string) => string | null }
+): void {
   const domain = getDomainKey(urlStr);
   let domainCookies = cookieJar.get(domain);
   if (!domainCookies) {
@@ -129,11 +166,11 @@ function storeResponseCookies(urlStr: string, headers: { getSetCookie?: () => st
   }
 }
 
-function getCookieHeader(urlStr: string): string {
+function getCookieHeader(urlStr: string): string | undefined {
   const domain = getDomainKey(urlStr);
   const domainCookies = cookieJar.get(domain);
   if (!domainCookies || domainCookies.size === 0) {
-    return 'i18n-prefs=USD; lc-main=en_US';
+    return undefined;
   }
   const pairs: string[] = ['i18n-prefs=USD', 'lc-main=en_US'];
   for (const [k, v] of domainCookies.entries()) {
@@ -153,23 +190,106 @@ export function detectAmazonBlock(
     return { blocked: true, reason: `HTTP status ${status}` };
   }
   const lower = html.toLowerCase();
-  if (/\bid=["']ap_login_form["']/.test(lower) || /<title[^>]*>\s*(?:amazon\s+sign[ -]?in|sign in)\s*<\/title>/.test(lower)) {
-    return {blocked:true, reason:'Amazon sign-in required for this review page'};
-  }
   if (
     lower.includes('validatecaptcha') ||
     lower.includes('api-services-support@amazon.com') ||
     lower.includes('type the characters you see in this image') ||
     lower.includes('enter the characters you see below') ||
-    lower.includes('sorry, we just need to make sure you\'re not a robot') ||
+    lower.includes("sorry, we just need to make sure you're not a robot") ||
     lower.includes('<title dir="ltr">robot check</title>')
   ) {
     return { blocked: true, reason: 'CAPTCHA / Robot Check page' };
   }
   if (html.trim().length < minHtmlChars) {
-    return { blocked: true, reason: `HTML body too short (${html.trim().length} < ${minHtmlChars} chars)` };
+    return {
+      blocked: true,
+      reason: `HTML body too short (${html.trim().length} < ${minHtmlChars} chars)`,
+    };
   }
   return { blocked: false };
+}
+
+export function isAmazonCaptchaOrRobot(html: string): boolean {
+  const lower = (html || '').toLowerCase();
+  return (
+    lower.includes('validatecaptcha') ||
+    lower.includes('api-services-support@amazon.com') ||
+    lower.includes('type the characters you see in this image') ||
+    lower.includes('enter the characters you see below') ||
+    lower.includes("sorry, we just need to make sure you're not a robot") ||
+    lower.includes('<title dir="ltr">robot check</title>')
+  );
+}
+
+/**
+ * Checks if the fetched HTML body contains real Amazon product page markers.
+ */
+export function hasAmazonProductMarker(html: string): boolean {
+  if (!html) return false;
+  return (
+    html.includes('id="productTitle"') ||
+    html.includes("id='productTitle'") ||
+    html.includes('id="title"') ||
+    html.includes('id="dp-container"') ||
+    html.includes('id="centerCol"') ||
+    html.includes('id="ppd"') ||
+    html.includes('data-asin=') ||
+    /<h1[^>]*id="title"/i.test(html) ||
+    /<span[^>]*id="productTitle"/i.test(html)
+  );
+}
+
+/**
+ * Detects whether an Amazon page response is dead (404, Dogs of Amazon, Page Not Found, or non-product redirect).
+ */
+export function isAmazonDeadListing(
+  status: number,
+  html: string,
+  url?: string
+): { isDead: boolean; reason?: string } {
+  // HTTP 429 / 503 are rate-limit / bot blocks (even when Amazon serves the cs_503 Dogs of Amazon page)
+  if (status === 429 || status === 503) {
+    return { isDead: false };
+  }
+  const isSearchUrl = Boolean(url && (/\/s\?/i.test(url) || /\/s\/ref=/i.test(url)));
+  if (isSearchUrl && status !== 404 && status !== 410) {
+    return { isDead: false };
+  }
+  if (status === 404 || status === 410) {
+    return { isDead: true, reason: `HTTP ${status} Not Found` };
+  }
+  const lower = (html || '').toLowerCase();
+  if (
+    lower.includes('cs_503') ||
+    lower.includes('500_503.png') ||
+    lower.includes('something went wrong on our end')
+  ) {
+    return { isDead: false };
+  }
+  if (
+    lower.includes("we couldn't find that page") ||
+    lower.includes("we couldn't find this page") ||
+    lower.includes('looking for something?') ||
+    lower.includes('page not found') ||
+    lower.includes('the web address you entered is not a functioning page on our site') ||
+    ((lower.includes('dogs of amazon') || lower.includes('dogs-of-amazon') || lower.includes('meet the dogs of amazon')) &&
+      !isAmazonCaptchaOrRobot(html))
+  ) {
+    return { isDead: true, reason: 'Amazon 404 Dog Page (Page Not Found)' };
+  }
+
+  // If this is expected to be a product page (/dp/ or /gp/product/):
+  const isProductUrl = url && (url.includes('/dp/') || url.includes('/gp/product/'));
+  if (isProductUrl && status >= 200 && status < 300) {
+    if (isAmazonCaptchaOrRobot(html)) {
+      return { isDead: false };
+    }
+    if (!hasAmazonProductMarker(html)) {
+      return { isDead: true, reason: 'Missing product markers (#productTitle, #dp-container)' };
+    }
+  }
+
+  return { isDead: false };
 }
 
 function buildScraperApiUrl(targetUrl: string): string | null {
@@ -188,8 +308,8 @@ export interface FetchAmazonHtmlOptions {
 }
 
 /**
- * Fetches an Amazon HTML page using the shared undici Agent, realistic Chrome headers, and cookie jar.
- * Automatically detects blocks (503/429/CAPTCHA/html<5000 chars) and retries via SCRAPER_PROXY_URL / SCRAPER_API_KEY if configured.
+ * Fetches an Amazon HTML page using the shared undici Agent and Safari macOS headers.
+ * Never pollutes the cookie jar with 503/CAPTCHA responses.
  */
 export async function fetchAmazonHtml(
   url: string,
@@ -200,51 +320,34 @@ export async function fetchAmazonHtml(
     throw new AmazonNetworkError(url, `Unsafe URL: ${safeCheck.reason}`);
   }
 
-  const timeoutMs = options.timeoutMs ?? 8000;
+  const timeoutMs = options.timeoutMs ?? 9000;
   const minHtmlChars = options.minHtmlChars ?? 5000;
-
-  if (scraplingEnabled() && isScraplingAmazonUrl(url)) {
-    let response: { status: number; html: string } | undefined;
-    try {
-      response = await fetchWithScrapling(url, { signal: options.signal, timeoutMs });
-    } catch (error) {
-      if (options.signal?.aborted) throw error;
-      // An unavailable Python runtime must not silently claim Scrapling worked.
-      console.warn('[Scrapling] HTTP fetch unavailable; using existing HTTP transport');
-    }
-    if (response) {
-      const check = detectAmazonBlock(response.status, response.html, minHtmlChars);
-      if (response.status === 503 && !/validatecaptcha|robot check|ap_login_form/i.test(response.html)) {
-        console.warn('[Scrapling] Service unavailable; checking the regular HTTP transport');
-      } else if (check.blocked || response.status < 200 || response.status >= 400) {
-        throw new AmazonBlockError(url, response.status, check.reason || `HTTP ${response.status}`);
-      } else {
-        return response.html;
-      }
-    }
-  }
 
   const attemptFetch = async (
     targetUrl: string,
     uaIndex: number,
-    dispatcher: Dispatcher
+    dispatcher: Dispatcher,
+    useCookies: boolean
   ): Promise<{ status: number; html: string }> => {
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const signal = options.signal
       ? AbortSignal.any([options.signal, timeoutSignal])
       : timeoutSignal;
 
-    const domainCookies = cookieJar.get(getDomainKey(url));
-    const hasSessionCookies = Boolean(domainCookies && domainCookies.size > 0);
+    const profile = BROWSER_PROFILES[uaIndex % BROWSER_PROFILES.length];
+    const cookieHeader = useCookies ? getCookieHeader(url) : undefined;
 
     const headers: Record<string, string> = {
-      ...AMAZON_US_HEADERS,
-      'User-Agent': CHROME_USER_AGENTS[uaIndex % CHROME_USER_AGENTS.length],
-      Cookie: getCookieHeader(url),
+      'User-Agent': profile.userAgent,
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': profile.acceptLanguage,
+      'Upgrade-Insecure-Requests': '1',
     };
-    if (options.referer && hasSessionCookies) {
+    if (cookieHeader) {
+      headers.Cookie = cookieHeader;
+    }
+    if (options.referer) {
       headers.Referer = options.referer;
-      headers['Sec-Fetch-Site'] = 'same-origin';
     }
 
     const res = await undiciFetch(targetUrl, {
@@ -255,79 +358,68 @@ export async function fetchAmazonHtml(
       redirect: 'follow',
     });
 
-    storeResponseCookies(url, res.headers as any);
     const html = await res.text();
+    const check = detectAmazonBlock(res.status, html, minHtmlChars);
+    if (!check.blocked && res.status >= 200 && res.status < 400 && html.length >= 10000) {
+      storeResponseCookies(url, res.headers as any);
+    }
     return { status: res.status, html };
   };
 
   let lastBlockReason = '';
   let lastStatus = 0;
+  const startProfileIdx = profileRotationCursor++;
 
-  // Attempt 1: Direct with shared keep-alive undici agent
-  try {
-    const { status, html } = await attemptFetch(url, 0, amazonUndiciAgent);
-    lastStatus = status;
-    const check = detectAmazonBlock(status, html, minHtmlChars);
-    if (!check.blocked && status >= 200 && status < 400) {
-      return html;
+  // Attempt 1..4: Rotate across diverse desktop Firefox/Safari profiles
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (options.signal?.aborted) break;
+    try {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 180 * attempt + Math.floor(Math.random() * 140)));
+      }
+      const { status, html } = await attemptFetch(
+        url,
+        startProfileIdx + attempt,
+        amazonUndiciAgent,
+        attempt % 2 === 0
+      );
+      lastStatus = status;
+      const deadCheck = isAmazonDeadListing(status, html, url);
+      if (deadCheck.isDead) {
+        throw new AmazonDeadListingError(url, status, deadCheck.reason || 'Dead listing');
+      }
+      const check = detectAmazonBlock(status, html, minHtmlChars);
+      if (!check.blocked && status >= 200 && status < 400) {
+        return html;
+      }
+      lastBlockReason = check.reason || `HTTP ${status}`;
+    } catch (err: unknown) {
+      if (err instanceof AmazonDeadListingError) throw err;
+      if (options.signal?.aborted) throw err;
+      lastBlockReason = (err as Error)?.message || 'Network failure';
     }
-    lastBlockReason = check.reason || `HTTP ${status}`;
-    console.warn(`[AmazonHttp] Direct attempt blocked on ${url}: ${lastBlockReason}`);
-  } catch (err: unknown) {
-    if (options.signal?.aborted) throw err;
-    console.warn(`[AmazonHttp] Direct fetch error on ${url}:`, (err as Error)?.message || err);
-    lastBlockReason = (err as Error)?.message || 'Network failure';
   }
 
-  // Attempt 2: Retry through SCRAPER_API_KEY or SCRAPER_PROXY_URL if configured
+  // Optional proxy fallback if configured
   const scraperApiUrl = buildScraperApiUrl(url);
   const proxyAgent = getProxyAgent();
-
   if (scraperApiUrl || proxyAgent) {
     try {
       const target = scraperApiUrl || url;
       const dispatcher = proxyAgent || amazonUndiciAgent;
-      const { status, html } = await attemptFetch(target, 1, dispatcher);
+      const { status, html } = await attemptFetch(target, startProfileIdx + 3, dispatcher, false);
       lastStatus = status;
       const check = detectAmazonBlock(status, html, minHtmlChars);
       if (!check.blocked && status >= 200 && status < 400) {
         return html;
       }
       lastBlockReason = check.reason || `Proxy HTTP ${status}`;
-      console.warn(`[AmazonHttp] Proxy retry blocked on ${url}: ${lastBlockReason}`);
     } catch (err: unknown) {
       if (options.signal?.aborted) throw err;
-      console.warn(`[AmazonHttp] Proxy retry error on ${url}:`, (err as Error)?.message || err);
-    }
-  } else {
-    // Warm session cookies and retry with alternate Chrome profile after short jitter
-    try {
-      await new Promise((r) => setTimeout(r, 250 + Math.floor(Math.random() * 200)));
-      const { status, html } = await attemptFetch(url, 1, amazonUndiciAgent);
-      lastStatus = status;
-      const check = detectAmazonBlock(status, html, minHtmlChars);
-      if (!check.blocked && status >= 200 && status < 400) {
-        return html;
-      }
-      lastBlockReason = check.reason || `Retry HTTP ${status}`;
-    } catch (err: unknown) {
-      if (options.signal?.aborted) throw err;
-      throw new AmazonNetworkError(url, (err as Error)?.message || String(err));
     }
   }
 
   throw new AmazonBlockError(url, lastStatus || 503, lastBlockReason || 'Blocked by Amazon');
-}
-
-export function productComparisonImageUrl(imageUrl:string):string {
-  try {
-    const url=new URL(imageUrl);
-    if(url.protocol==='https:' && url.hostname==='m.media-amazon.com' && url.pathname.startsWith('/images/I/')) {
-      url.pathname=url.pathname.replace(/\._[A-Z0-9,_-]+_\.(jpg|jpeg|png|webp)$/i,'._SL800_.$1');
-      return url.href;
-    }
-  } catch { /* The caller validates source URLs. */ }
-  return imageUrl;
 }
 
 export async function fetchProductImageAsBase64(
@@ -338,16 +430,15 @@ export async function fetchProductImageAsBase64(
   try {
     const timeoutSig = AbortSignal.timeout(4000);
     const combinedSig = signal ? AbortSignal.any([signal, timeoutSig]) : timeoutSig;
-    for (const target of new Set([productComparisonImageUrl(imageUrl),imageUrl])) {
-    const res = await undiciFetch(target, {
+    const res = await undiciFetch(imageUrl, {
       headers: {
         'User-Agent': AMAZON_CHROME_USER_AGENT,
-        Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8',
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
       },
       dispatcher: amazonUndiciAgent,
       signal: combinedSig,
     });
-    if (!res.ok) { await res.body?.cancel(); continue; }
+    if (!res.ok) return null;
     const mimeType = res.headers.get('content-type') || 'image/jpeg';
     if (!mimeType.startsWith('image/')) return null;
     const arrayBuffer = await res.arrayBuffer();
@@ -356,8 +447,6 @@ export async function fetchProductImageAsBase64(
       base64: Buffer.from(arrayBuffer).toString('base64'),
       mimeType,
     };
-    }
-    return null;
   } catch (err: unknown) {
     console.warn(`[AmazonHttp] Failed to fetch image ${imageUrl}:`, (err as Error)?.message || err);
     return null;

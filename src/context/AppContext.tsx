@@ -1,11 +1,18 @@
-import {videoKeys} from '../utils/videoIdentity.ts';
-import {sessionMetrics} from '../utils/sessionMetrics.ts';
-import {recoverTikTokStream} from '../utils/recoverTikTokStream.ts';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import {combinedSearch} from '../utils/combinedSearch.ts';
 import { Language, translations } from '../translations/index.ts';
-import { Project, CandidateAsset, ProviderCapability, WorkspaceUsage } from '../types/index.ts';
-import {analyzeImageWithGemini, prepareIdentityImage} from '../utils/geminiIdentity.ts';
+import {
+  Project,
+  CandidateAsset,
+  ProviderCapability,
+  WorkspaceUsage,
+  SwipeVerdict,
+  CreativeHookAnalysis,
+  MatchMode,
+  IdentityCardV2Client,
+  RejectedCandidateItem,
+  SearchBreakdownSummary,
+} from '../types/index.ts';
+import { computeWinnerSignal } from '../utils/rules.ts';
 
 export type NavTab = 'search' | 'projects' | 'library' | 'integrations' | 'usage' | 'settings';
 
@@ -25,6 +32,27 @@ interface AppContextType {
   refreshProjects: () => Promise<void>;
   library: CandidateAsset[];
   refreshLibrary: () => Promise<void>;
+  saveToSwipeFile: (
+    asset: CandidateAsset,
+    verdict?: SwipeVerdict,
+    editorNotes?: string
+  ) => Promise<CandidateAsset | null>;
+  updateSwipeItem: (
+    assetId: string,
+    updates: {
+      swipeVerdict?: SwipeVerdict;
+      editorNotes?: string;
+      creativeAnalysis?: CreativeHookAnalysis;
+    }
+  ) => Promise<CandidateAsset | null>;
+  removeFromSwipeFile: (assetId: string) => Promise<boolean>;
+  generateCreativeBrief: (params: {
+    productName: string;
+    videoTitle?: string;
+    platform?: string;
+    reviewerOrChannel?: string;
+    assetId?: string;
+  }) => Promise<CreativeHookAnalysis | null>;
   providers: ProviderCapability[];
   refreshProviders: () => Promise<void>;
   usage: WorkspaceUsage | null;
@@ -43,17 +71,20 @@ interface AppContextType {
     productUrl?: string;
     mediaType: Project['mediaTypeRequested'];
     sourcePlatform?: 'all' | 'amazon' | 'tiktok';
-    previousAssets?:CandidateAsset[];
-    amazonDiscoveryBlocked?:boolean;
-    sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
+    targetAmazonVideoCount?: number;
+    targetTikTokVideoCount?: number;
     targetPhotoCount: number;
     referenceImage?: string | null;
-    imageConfirmedLocally?: boolean;
-    similarReviews?:boolean;
-    verifiedExpansion?: Project['verifiedExpansion'];
+    matchMode?: MatchMode;
+    includeSimilar?: boolean;
+    mustMatch?: string[];
+    mustNotBe?: string[];
+    identityCard?: IdentityCardV2Client | null;
   }) => Promise<void>;
+  acceptRejectedCandidate: (item: RejectedCandidateItem) => Promise<void>;
   cancelStreamingSearch: () => void;
+  autoResolvedProductName: string | null;
   sessionId: string;
 }
 
@@ -106,6 +137,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [usage, setUsage] = useState<WorkspaceUsage | null>(null);
   const [isNewSearchOpen, setIsNewSearchOpen] = useState(false);
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
+  const [autoResolvedProductName, setAutoResolvedProductName] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'warn' | 'error' } | null>(null);
 
   const streamAbortControllerRef = useRef<AbortController | null>(null);
@@ -183,21 +215,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (token && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${token}`);
     }
-    const options:RequestInit = {
+    const res = await fetch(input, {
       ...init,
       headers,
       credentials: 'same-origin',
-    };
-    const fetchStream=async(url:RequestInfo|URL,settings:RequestInit={})=>{
-      const response=await fetch(url,settings);
-      const body=settings.body && JSON.parse(String(settings.body));
-      return body?.sourcePlatform==='tiktok'?recoverTikTokStream(response,settings):response;
-    };
-    const streaming=input==='/api/stream-search' && Boolean(options.body);
-    const body=streaming?JSON.parse(String(options.body)):null;
-    const res=body?.sourcePlatform==='all' && body.mediaType!=='photo'
-      ? combinedSearch(options,fetchStream)
-      : streaming ? await fetchStream(input,options) : await fetch(input,options);
+    });
     if (res.status === 401) {
       const urlStr = typeof input === 'string' ? input : input.toString();
       if (!urlStr.includes('/api/auth/login') && !urlStr.includes('/api/auth/session')) {
@@ -223,15 +245,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     productUrl?: string;
     mediaType: Project['mediaTypeRequested'];
     sourcePlatform?: 'all' | 'amazon' | 'tiktok';
-    previousAssets?:CandidateAsset[];
-    amazonDiscoveryBlocked?:boolean;
-    sourceVideoCounts?: { amazon:number; tiktok:number };
     targetVideoCount: number;
+    targetAmazonVideoCount?: number;
+    targetTikTokVideoCount?: number;
     targetPhotoCount: number;
     referenceImage?: string | null;
-    imageConfirmedLocally?: boolean;
-    similarReviews?:boolean;
-    verifiedExpansion?: Project['verifiedExpansion'];
+    matchMode?: MatchMode;
+    includeSimilar?: boolean;
+    mustMatch?: string[];
+    mustNotBe?: string[];
+    identityCard?: IdentityCardV2Client | null;
   }) => {
     // 1. Cancel any previous streaming search and clear previous results
     if (streamReaderRef.current) {
@@ -252,21 +275,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     activeSearchIdRef.current = searchId;
     const projectId = `ephemeral-${searchId}`;
 
-    const effectiveVideoTarget = params.mediaType === 'photo' ? 0 : params.targetVideoCount;
+    const sourcePlatform = params.sourcePlatform || 'all';
+    const hasCustomBothCounts =
+      sourcePlatform === 'all' &&
+      (typeof params.targetAmazonVideoCount === 'number' ||
+        typeof params.targetTikTokVideoCount === 'number');
+
+    const amazonVideosRequested =
+      params.mediaType === 'photo'
+        ? 0
+        : sourcePlatform === 'tiktok'
+        ? 0
+        : typeof params.targetAmazonVideoCount === 'number'
+        ? Math.max(1, params.targetAmazonVideoCount)
+        : params.targetVideoCount;
+
+    const tiktokVideosRequested =
+      params.mediaType === 'photo'
+        ? 0
+        : sourcePlatform === 'amazon'
+        ? 0
+        : typeof params.targetTikTokVideoCount === 'number'
+        ? Math.max(1, params.targetTikTokVideoCount)
+        : params.targetVideoCount;
+
+    const effectiveVideoTarget =
+      params.mediaType === 'photo'
+        ? 0
+        : hasCustomBothCounts
+        ? amazonVideosRequested + tiktokVideosRequested
+        : params.targetVideoCount;
     const effectivePhotoTarget = params.mediaType === 'video' ? 0 : params.targetPhotoCount;
-    const previous=params.previousAssets||[];
-    const remainingVideos=Math.max(0,effectiveVideoTarget-previous.filter(a=>a.mediaType==='video').length);
-    const remainingPhotos=Math.max(0,effectivePhotoTarget-previous.filter(a=>a.mediaType==='photo').length);
-    const remainingQuotas=params.sourceVideoCounts && Object.fromEntries(Object.entries(params.sourceVideoCounts).map(([source,count])=>[source,Math.max(0,count-previous.filter(a=>a.platform===source&&a.mediaType==='video').length)]));
     const totalTarget = effectiveVideoTarget + effectivePhotoTarget;
 
-    const sourcePlatform = params.sourcePlatform || 'all';
     const sourcePriority: Project['settings']['sourcePriority'] =
       sourcePlatform === 'tiktok'
         ? ['tiktok']
         : sourcePlatform === 'amazon'
         ? ['amazon']
         : ['amazon', 'tiktok'];
+
+    const resolvedMatchMode: MatchMode = params.matchMode || 'same_design';
+    const resolvedIncludeSimilar = Boolean(params.includeSimilar);
 
     const initialProject: Project = {
       id: projectId,
@@ -286,12 +336,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ]
         : [],
       mediaTypeRequested: params.mediaType,
-      similarReviews:params.similarReviews,verifiedExpansion: params.verifiedExpansion,
-      sourceVideoCounts: params.sourceVideoCounts,
       targetVideoCount: effectiveVideoTarget,
       targetPhotoCount: effectivePhotoTarget,
       settings: {
-        strictness: 'color_allowed',
+        strictness: resolvedMatchMode === 'strict_color' ? 'exact' : 'color_allowed',
+        matchMode: resolvedMatchMode,
+        includeSimilar: resolvedIncludeSimilar,
         contentSources: 'customer_only',
         sourcePriority,
         preferredMarketplaces: ['US'],
@@ -317,28 +367,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         {
           timestamp: new Date().toISOString(),
           stage: 'searching',
-          message: params.imageConfirmedLocally
-            ? 'تم تأكيد صفحة المنتج؛ جاري بدء جمع المراجعات.'
-            : params.referenceImage
+          message: params.referenceImage
             ? 'جاري رفع صورة المنتج وفحص تصميمه ومواصفاته بالذكاء الاصطناعي...'
             : sourcePlatform === 'tiktok'
-            ? 'جاري بدء البحث المباشر في فيديوهات تيك توك (TikTok)...'
+            ? `جاري بدء البحث المباشر في فيديوهات تيك توك (${effectiveVideoTarget} فيديو)...`
             : sourcePlatform === 'amazon'
-            ? 'جاري بدء البحث المباشر في أمازون أمريكا...'
-            : 'جاري بدء البحث المباشر في أمازون أمريكا وتيك توك...',
+            ? `جاري بدء البحث المباشر في أمازون (${effectiveVideoTarget} فيديو)...`
+            : `جاري بدء البحث المباشر في المنصتين (${amazonVideosRequested} فيديو أمازون + ${tiktokVideosRequested} فيديو تيك توك)...`,
           level: 'info',
         },
       ],
-      candidates: previous.map(a=>({...a,projectId})),
+      candidates: [],
+      rejectedCandidates: [],
+      identityCard: params.identityCard || undefined,
     };
 
+    setAutoResolvedProductName(null);
     setCurrentProject(initialProject);
     setActiveTab('search');
 
     try {
-      const effectiveExpansion=params.verifiedExpansion;
-      const matchImage=sourcePlatform!=='amazon' && params.referenceImage
-        ? await prepareIdentityImage(params.referenceImage) : undefined;
       const res = await apiFetch('/api/stream-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -347,18 +395,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           searchId,
           productName: params.productName,
           productUrl: params.productUrl,
-          mediaType: !remainingVideos ? 'photo' : !remainingPhotos ? 'video' : params.mediaType,
+          mediaType: params.mediaType,
           sourcePlatform,
-          amazonDiscoveryBlocked:params.amazonDiscoveryBlocked,
-          previousMedia:previous.map(a=>a.mediaUrl), previousPosts:previous.filter(a=>a.platform==='tiktok').map(a=>a.sourceUrl),
-          sourceVideoCounts: remainingQuotas,
-      targetVideoCount: remainingVideos,
-          targetPhotoCount: remainingPhotos,
-          matchImage,selectedProductUrl:params.productUrl,
+          targetVideoCount: effectiveVideoTarget,
+          targetAmazonVideoCount:
+            sourcePlatform === 'all' ? amazonVideosRequested : undefined,
+          targetTikTokVideoCount:
+            sourcePlatform === 'all' ? tiktokVideosRequested : undefined,
+          targetPhotoCount: effectivePhotoTarget,
           hasReferenceImage: Boolean(params.referenceImage),
-          referenceImage: params.imageConfirmedLocally || effectiveExpansion ? undefined : params.referenceImage || undefined,
-          similarReviews:params.similarReviews,hadOriginalVideos:previous.some(a=>a.platform==='amazon'&&a.mediaType==='video'&&!a.userFacingMatchLabel?.startsWith('منتج بديل')),
-          verifiedExpansion: effectiveExpansion,
+          referenceImage: params.referenceImage || undefined,
+          matchMode: resolvedMatchMode,
+          includeSimilar: resolvedIncludeSimilar,
+          mustMatch: params.mustMatch || params.identityCard?.mustMatch,
+          mustNotBe: params.mustNotBe || params.identityCard?.mustNotBe,
         }),
       });
 
@@ -372,7 +422,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const decoder = new TextDecoder();
       let buffer = '';
 
-      let firstVideoRecorded=false;
       const processLine = (line: string) => {
         if (abortController.signal.aborted || activeSearchIdRef.current !== searchId) return;
         const trimmed = line.trim();
@@ -382,18 +431,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // Strictly ignore any event from a previous searchId!
           if (!evt || evt.searchId !== searchId || activeSearchIdRef.current !== searchId) return;
 
-          if (evt.type === 'warning' || evt.type === 'progress') {
+          if (evt.type === 'identity' && evt.identityCard) {
+            const card: IdentityCardV2Client = evt.identityCard;
+            if (card.nameEn) {
+              setAutoResolvedProductName(card.nameEn);
+            }
+            setCurrentProject((prev) => {
+              if (!prev || prev.id !== projectId) return prev;
+              return {
+                ...prev,
+                name: card.nameEn || prev.name,
+                identityCard: card,
+              };
+            });
+          } else if (evt.type === 'rejected' && evt.rejected) {
+            const rej: RejectedCandidateItem = evt.rejected;
+            setCurrentProject((prev) => {
+              if (!prev || prev.id !== projectId) return prev;
+              const existing = prev.rejectedCandidates || [];
+              if (existing.some((r) => r.id === rej.id)) return prev;
+              return {
+                ...prev,
+                rejectedCandidates: [...existing, rej],
+              };
+            });
+          } else if (evt.type === 'warning' || evt.type === 'progress') {
+            if (typeof evt.resolvedProductName === 'string' && evt.resolvedProductName.trim()) {
+              setAutoResolvedProductName(evt.resolvedProductName.trim());
+            }
             setCurrentProject((prev) => {
               if (!prev || prev.id !== projectId) return prev;
               const updatedName =
-                evt.resolvedProductName &&
-                (/^https?:\/\//i.test(prev.name) || prev.name === 'بحث بالصورة' || !prev.name.trim())
-                  ? evt.resolvedProductName
+                typeof evt.resolvedProductName === 'string' && evt.resolvedProductName.trim()
+                  ? evt.resolvedProductName.trim()
                   : prev.name;
               return {
                 ...prev,
                 name: updatedName,
-                sourceStatus:evt.sourceStatus?{...prev.sourceStatus,[evt.source]:evt.sourceStatus}:prev.sourceStatus,
                 counters: {
                   ...prev.counters,
                   sourcesInspected: evt.pagesInspected ?? prev.counters.sourcesInspected,
@@ -412,7 +486,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else if (evt.type === 'result' && evt.asset) {
             const a = evt.asset;
             if (a.searchId && a.searchId !== searchId) return;
-            if(a.mediaType==='video'&&!firstVideoRecorded){sessionMetrics.firstVideoMs+=Date.now()-Date.parse(initialProject.createdAt);sessionMetrics.videoSearches++;firstVideoRecorded=true;}
             const isTikTokAsset = a.platform === 'tiktok';
             const newCandidate: CandidateAsset = {
               id: a.id,
@@ -425,35 +498,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               reviewerOrChannel: a.reviewerOrChannel,
               reviewId: a.reviewId,
               durationSeconds: a.durationSeconds,
+              ratingCount: typeof a.ratingCount === 'number' ? a.ratingCount : undefined,
               thumbnailUrl: a.thumbnailUrl || '',
+              posterSource: a.posterSource,
+              verifiedByAi: a.verifiedByAi !== false,
+              verificationStage: a.verificationStage,
+              verdictTier: a.verdictTier,
+              embedHtml: a.embedHtml,
+              downloadFailureReason: a.downloadFailureReason,
               mediaUrl: a.mediaUrl,
               downloadUrl: a.downloadUrl || a.mediaUrl,
               provenance: a.provenance || 'unverified_customer_review',
               matchCategory: a.matchCategory || 'exact_design',
-              matchScore: a.matchScore ?? 92,
-              userFacingMatchLabel: a.userFacingMatchLabel || 'نفس المنتج (تطابق 100%)',
+              matchScore: a.matchScore || 92,
+              userFacingMatchLabel: a.userFacingMatchLabel || 'نفس المنتج (تطابق مؤكد)',
               visibleDifferences: [],
               supportingObservations: [
                 isTikTokAsset
-                  ? 'ظهر الفيديو في بحث TikTok باسم المنتج'
-                  : 'مطابقة مباشرة مع المنتج المطلوب على أمازون أمريكا',
+                  ? 'مطابقة مباشرة مع المنتج المطلوب على تيك توك (TikTok)'
+                  : 'مطابقة مباشرة مع المنتج المطلوب على أمازون',
               ],
               unknowns: [],
               contentDescription: isTikTokAsset
-                ? 'فيديو عام ظهر في نتائج البحث على TikTok'
-                : 'محتوى من مراجعات أمازون أمريكا',
-              reviewStars: a.reviewStars,
-              sentiment: a.sentiment || 'neutral',
-              downloadStatus: 'verified_available',
+                ? 'فيديو مراجعة وعرض منتج إيجابي على تيك توك'
+                : 'مراجعة عميل إيجابية على أمازون',
+              sentiment: 'positive',
+              downloadStatus: a.downloadFailureReason ? 'source_only' : 'verified_available',
+              downloadError: a.downloadFailureReason,
               collectedAt: a.collectedAt || new Date().toISOString(),
               rightsStatus: 'public_reference',
-              selectedForExport: true,
+              selectedForExport: !a.downloadFailureReason,
+              winnerSignal: computeWinnerSignal({
+                platform: a.platform || 'amazon',
+                ratingCount: typeof a.ratingCount === 'number' ? a.ratingCount : undefined,
+                durationSeconds: a.durationSeconds,
+                matchScore: a.matchScore || 92,
+                provenance: a.provenance || 'unverified_customer_review',
+              }),
             };
 
             setCurrentProject((prev) => {
               if (!prev || prev.id !== projectId) return prev;
-              const keys=new Set(videoKeys(newCandidate));
-              if (prev.candidates.some((c) => c.id === newCandidate.id || videoKeys(c).some(key=>keys.has(key)))) {
+              if (prev.candidates.some((c) => c.id === newCandidate.id || c.mediaUrl === newCandidate.mediaUrl)) {
                 return prev;
               }
               const nextCandidates = [...prev.candidates, newCandidate];
@@ -475,10 +561,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const found = prev.candidates.length;
               const finalState: Project['jobState'] =
                 found >= totalTarget ? 'completed' : 'completed_partial';
+              const breakdown: SearchBreakdownSummary | undefined = evt.breakdownSummary;
 
               return {
                 ...prev,
                 jobState: finalState,
+                breakdownSummary: breakdown || prev.breakdownSummary,
                 logs: [
                   ...prev.logs,
                   {
@@ -540,6 +628,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const acceptRejectedCandidate = async (item: RejectedCandidateItem): Promise<void> => {
+    try {
+      const imageHash = currentProject?.identityCard?.imageHash || 'default';
+      const res = await apiFetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageHash,
+          candidateId: item.id,
+          candidateTitle: item.title,
+          candidateUrl: item.url,
+          previousRejectionReasonAr: item.reasonAr,
+          userAction: 'accept',
+        }),
+      });
+      if (!res.ok) {
+        showToast('تعذر حفظ قبول العنصر', 'error');
+        return;
+      }
+      const data = await res.json();
+      const extracted = Array.isArray(data?.extractedAssets) ? data.extractedAssets : [];
+
+      setCurrentProject((prev) => {
+        if (!prev) return prev;
+        const nextRejected = (prev.rejectedCandidates || []).map((r) =>
+          r.id === item.id ? { ...r, acceptedByUser: true } : r
+        );
+        const mappedExtracted: CandidateAsset[] = extracted.map((a: any) => ({
+          id: a.id,
+          projectId: prev.id,
+          title: a.title,
+          mediaType: a.mediaType || 'video',
+          platform: a.platform || 'amazon',
+          sourceUrl: a.sourceUrl,
+          productListingUrl: a.productListingUrl,
+          reviewerOrChannel: a.reviewerOrChannel,
+          reviewId: a.reviewId,
+          thumbnailUrl: a.thumbnailUrl || item.imageUrl || '',
+          posterSource: a.posterSource || 'real_video_frame',
+          verifiedByAi: true,
+          verificationStage: 'user_feedback_accepted',
+          mediaUrl: a.mediaUrl,
+          downloadUrl: a.downloadUrl || a.mediaUrl,
+          provenance: a.provenance || 'unverified_customer_review',
+          matchCategory: 'permitted_variation',
+          matchScore: 95,
+          userFacingMatchLabel: 'تم قبوله يدوياً بواسطة المستخدم',
+          visibleDifferences: [],
+          supportingObservations: ['تم قبوله يدوياً وحفظه كإشارة تدريب للتحقق البصري'],
+          unknowns: [],
+          contentDescription: a.title,
+          sentiment: 'positive',
+          downloadStatus: 'verified_available',
+          collectedAt: a.collectedAt || new Date().toISOString(),
+          rightsStatus: 'public_reference',
+          selectedForExport: true,
+        }));
+
+        const nextCandidates = [...prev.candidates];
+        for (const mc of mappedExtracted) {
+          if (!nextCandidates.some((c) => c.id === mc.id || c.mediaUrl === mc.mediaUrl)) {
+            nextCandidates.push(mc);
+          }
+        }
+
+        return {
+          ...prev,
+          rejectedCandidates: nextRejected,
+          candidates: nextCandidates,
+          counters: {
+            ...prev.counters,
+            candidatesDiscovered: nextCandidates.length,
+            visuallyMatchedAssets: nextCandidates.length,
+            downloadedAssets: nextCandidates.length,
+            verifiedAssets: nextCandidates.length,
+          },
+        };
+      });
+
+      showToast(
+        extracted.length > 0
+          ? `تم قبول العنصر وإضافة ${extracted.length} فيديو مراجعة إلى النتائج`
+          : 'تم قبول العنصر وحفظ تفضيلك لعمليات التحقق القادمة',
+        'success'
+      );
+    } catch {
+      showToast('تعذر الاتصال بالخادم لحفظ قبول العنصر', 'error');
+    }
+  };
+
   const login = async (code: string): Promise<{ ok: boolean; error?: string }> => {
     try {
       const res = await fetch('/api/auth/login', {
@@ -563,7 +741,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authTokenRef.current = data.token;
       }
       setIsAuthenticated(true);
-      await refreshProjects();
+      await Promise.all([refreshProjects(), refreshLibrary()]);
       return { ok: true };
     } catch {
       return { ok: false, error: 'تعذر الاتصال بالخادم. يرجى المحاولة مرة أخرى.' };
@@ -660,7 +838,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const downloadWithSession = async (url: string, fallbackFilename: string): Promise<boolean> => {
-    sessionMetrics.downloadAttempts++;
     const result = await fetchMediaBlob(url, false);
     if (!result || result.blob.size === 0) {
       return false;
@@ -674,7 +851,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    sessionMetrics.downloadsReady++;
     document.body.removeChild(a);
 
     setTimeout(() => {
@@ -717,6 +893,115 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {}
   };
 
+  const saveToSwipeFile = async (
+    asset: CandidateAsset,
+    verdict: SwipeVerdict = 'winner',
+    editorNotes?: string
+  ): Promise<CandidateAsset | null> => {
+    try {
+      const res = await apiFetch('/api/library', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asset, verdict, editorNotes }),
+      });
+      if (!res.ok) {
+        showToast('تعذر حفظ الفيديو في مكتبة Swipe File', 'error');
+        return null;
+      }
+      const data = await res.json();
+      const saved: CandidateAsset = data.asset;
+      setLibrary((prev) => {
+        const filtered = prev.filter((item) => item.id !== saved.id);
+        return [saved, ...filtered];
+      });
+      showToast('تم حفظ الفيديو في مكتبة Swipe File وأرشفته محلياً', 'success');
+      return saved;
+    } catch {
+      showToast('تعذر الاتصال بالخادم لحفظ الفيديو', 'error');
+      return null;
+    }
+  };
+
+  const updateSwipeItem = async (
+    assetId: string,
+    updates: {
+      swipeVerdict?: SwipeVerdict;
+      editorNotes?: string;
+      creativeAnalysis?: CreativeHookAnalysis;
+    }
+  ): Promise<CandidateAsset | null> => {
+    try {
+      const res = await apiFetch(`/api/library/${encodeURIComponent(assetId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const updated: CandidateAsset = data.asset;
+      setLibrary((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      return updated;
+    } catch {
+      return null;
+    }
+  };
+
+  const removeFromSwipeFile = async (assetId: string): Promise<boolean> => {
+    try {
+      const res = await apiFetch(`/api/library/${encodeURIComponent(assetId)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) return false;
+      setLibrary((prev) => prev.filter((item) => item.id !== assetId));
+      showToast('تم إزالة العنصر من مكتبة Swipe File', 'info');
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const generateCreativeBrief = async (params: {
+    productName: string;
+    videoTitle?: string;
+    platform?: string;
+    reviewerOrChannel?: string;
+    assetId?: string;
+  }): Promise<CreativeHookAnalysis | null> => {
+    try {
+      const res = await apiFetch('/api/gemini/creative-brief', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      if (!res.ok) {
+        showToast('تعذر توليد تحليل الـ Hooks والسكريبت حالياً', 'error');
+        return null;
+      }
+      const data = await res.json();
+      const analysis: CreativeHookAnalysis = data.analysis;
+      if (params.assetId) {
+        setLibrary((prev) =>
+          prev.map((item) =>
+            item.id === params.assetId ? { ...item, creativeAnalysis: analysis } : item
+          )
+        );
+        setCurrentProject((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            candidates: prev.candidates.map((c) =>
+              c.id === params.assetId ? { ...c, creativeAnalysis: analysis } : c
+            ),
+          };
+        });
+      }
+      return analysis;
+    } catch {
+      showToast('تعذر الاتصال بخدمة التحليل الإبداعي', 'error');
+      return null;
+    }
+  };
+
   const refreshProviders = async () => {
     try {
       const res = await apiFetch('/api/providers');
@@ -751,7 +1036,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const data = await res.json();
           if (data.authenticated) {
             setIsAuthenticated(true);
-            await refreshProjects();
+            await Promise.all([refreshProjects(), refreshLibrary()]);
             return;
           }
         }
@@ -888,6 +1173,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshProjects,
         library,
         refreshLibrary,
+        saveToSwipeFile,
+        updateSwipeItem,
+        removeFromSwipeFile,
+        generateCreativeBrief,
         providers,
         refreshProviders,
         usage,
@@ -902,7 +1191,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetchMediaBlob,
         downloadWithSession,
         startStreamingSearch,
+        acceptRejectedCandidate,
         cancelStreamingSearch,
+        autoResolvedProductName,
         sessionId: authToken || '',
       }}
     >

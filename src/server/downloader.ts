@@ -10,6 +10,7 @@ import type { DownloadStatus } from '../types/index.ts';
 import { DOWNLOADS_DIR as CONFIG_DOWNLOADS_DIR, MAX_CACHE_BYTES } from './config.ts';
 import { amazonUndiciAgent, AMAZON_CHROME_USER_AGENT } from './amazonHttp.ts';
 import { resolveBestVideoDownloadUrl } from './amazonVideos.ts';
+import { isTikTokUrl, resolveTikTokPlayableStream } from './tiktokVideos.ts';
 
 export const DOWNLOADS_DIR = CONFIG_DOWNLOADS_DIR;
 const CACHE_INDEX_FILE = path.join(DOWNLOADS_DIR, 'verified_media_cache.json');
@@ -51,6 +52,18 @@ const shaProbeCache = new Map<
   string,
   { valid: boolean; duration?: number; width?: number; height?: number }
 >();
+
+// Registry of files currently being streamed or packaged in an archive (never evict)
+const pinnedFilePaths = new Set<string>();
+
+export function pinCachedFile(filePath?: string): () => void {
+  if (!filePath) return () => {};
+  const norm = path.resolve(filePath);
+  pinnedFilePaths.add(norm);
+  return () => {
+    pinnedFilePaths.delete(norm);
+  };
+}
 
 // Priority Prewarm Queue: Concurrency 5 for direct MP4/image, semaphore 2 for ffmpeg/HLS jobs
 interface PrewarmTask {
@@ -231,6 +244,9 @@ export function cleanupDownloadsCache(removeTempFiles = false): void {
       fileEntries.sort((a, b) => a.lastAccess - b.lastAccess);
       for (const entry of fileEntries) {
         if (totalBytes <= MAX_CACHE_BYTES) break;
+        if (pinnedFilePaths.has(path.resolve(entry.fullPath))) {
+          continue; // Never evict files currently being exported or streamed
+        }
         try {
           fs.unlinkSync(entry.fullPath);
           totalBytes -= entry.size;
@@ -723,9 +739,20 @@ async function executeDownloadMediaInternal(
   tStart: number,
   signal?: AbortSignal
 ): Promise<DownloadResult> {
-  // Resolve best download URL if this is an Amazon VSE HLS URL that hasn't been resolved yet
+  // Resolve best download URL if this is a TikTok video URL or an Amazon VSE HLS URL
   let effectiveUrl = url;
-  if (mediaType === 'video' && isLikelyHlsUrl(url) && url.includes('vse-vms-transcoding-artifact')) {
+  let customFetchHeaders: Record<string, string> | undefined;
+  if (mediaType === 'video' && isTikTokUrl(url)) {
+    try {
+      const resolvedTikTok = await resolveTikTokPlayableStream(url, signal);
+      if (resolvedTikTok) {
+        effectiveUrl = resolvedTikTok.streamUrl;
+        customFetchHeaders = resolvedTikTok.headers;
+      }
+    } catch {
+      effectiveUrl = url;
+    }
+  } else if (mediaType === 'video' && isLikelyHlsUrl(url) && url.includes('vse-vms-transcoding-artifact')) {
     try {
       effectiveUrl = await resolveBestVideoDownloadUrl(url, signal);
     } catch {
@@ -861,7 +888,7 @@ async function executeDownloadMediaInternal(
       const response = await undiciFetch(currentUrl, {
         signal: controller.signal,
         dispatcher: amazonUndiciAgent,
-        headers: {
+        headers: customFetchHeaders || {
           'User-Agent': AMAZON_CHROME_USER_AGENT,
           Accept:
             mediaType === 'video'
@@ -1010,6 +1037,9 @@ async function executeDownloadMediaInternal(
         lastAccessedAt: now,
       };
       urlMediaCache.set(urlKey, record);
+      if (effectiveUrl && effectiveUrl !== url) {
+        urlMediaCache.set(`${mediaType}:${effectiveUrl}`, record);
+      }
       saveMediaCache();
       cleanupDownloadsCache(false);
 
@@ -1051,5 +1081,153 @@ async function executeDownloadMediaInternal(
   return {
     status: 'download_failed',
     error: 'تم تجاوز عدد عمليات التحويل المسموح بها.',
+  };
+}
+
+/**
+ * Resolves a verified local media file for an asset by checking:
+ * 1) existing `localFilePath`,
+ * 2) `urlMediaCache` across `sourceUrl`, `mediaUrl`, `downloadUrl`, and TikTok video ID matches,
+ * 3) live `downloadMedia` preferring the canonical TikTok page URL (so session cookies are fresh)
+ *    before falling back to `downloadUrl`.
+ */
+export async function resolveBestLocalMediaForAsset(
+  asset: {
+    id: string;
+    mediaType?: 'video' | 'photo';
+    mediaUrl?: string;
+    downloadUrl?: string;
+    sourceUrl?: string;
+    productListingUrl?: string;
+    localFilePath?: string;
+  },
+  signal?: AbortSignal
+): Promise<{
+  status: 'ready' | 'link_only' | 'failed';
+  localFilePath?: string;
+  fileSizeBytes?: number;
+  reason?: string;
+}> {
+  const mediaType: 'video' | 'photo' = asset.mediaType === 'photo' ? 'photo' : 'video';
+
+  if (asset.localFilePath && fs.existsSync(asset.localFilePath)) {
+    try {
+      const st = fs.statSync(asset.localFilePath);
+      if (st.size > 1024) {
+        return {
+          status: 'ready',
+          localFilePath: asset.localFilePath,
+          fileSizeBytes: st.size,
+        };
+      }
+    } catch {}
+  }
+
+  const candidateUrls = Array.from(
+    new Set(
+      [asset.sourceUrl, asset.mediaUrl, asset.downloadUrl, asset.productListingUrl]
+        .map((u) => (typeof u === 'string' ? u.trim() : ''))
+        .filter((u) => u.startsWith('http'))
+    )
+  );
+
+  // 1. Check urlMediaCache directly for any of the asset's URLs
+  for (const u of candidateUrls) {
+    const rec = urlMediaCache.get(`${mediaType}:${u}`);
+    if (rec && rec.localFilePath && fs.existsSync(rec.localFilePath)) {
+      try {
+        const st = fs.statSync(rec.localFilePath);
+        if (st.size > 1024) {
+          return {
+            status: 'ready',
+            localFilePath: rec.localFilePath,
+            fileSizeBytes: st.size,
+          };
+        }
+      } catch {}
+    }
+  }
+
+  // 2. Check urlMediaCache by TikTok video ID if any URL contains /video/<id>
+  for (const u of candidateUrls) {
+    const m = u.match(/\/video\/(\d{10,25})/);
+    if (m) {
+      const vidId = m[1];
+      for (const [k, rec] of urlMediaCache.entries()) {
+        if (k.includes(vidId) && rec.localFilePath && fs.existsSync(rec.localFilePath)) {
+          try {
+            const st = fs.statSync(rec.localFilePath);
+            if (st.size > 1024) {
+              return {
+                status: 'ready',
+                localFilePath: rec.localFilePath,
+                fileSizeBytes: st.size,
+              };
+            }
+          } catch {}
+        }
+      }
+    }
+  }
+
+  // 3. Order candidate URLs for live download: prefer canonical TikTok page URL over raw v16-webapp-prime CDN URL
+  // because resolveTikTokPlayableStream fetches a fresh session cookie + playAddr from the canonical URL.
+  const orderedForDownload = [...candidateUrls].sort((a, b) => {
+    const aIsCanonicalTikTok = /tiktok\.com\/@[^/]+\/video\/\d+/i.test(a) ? 0 : 1;
+    const bIsCanonicalTikTok = /tiktok\.com\/@[^/]+\/video\/\d+/i.test(b) ? 0 : 1;
+    return aIsCanonicalTikTok - bIsCanonicalTikTok;
+  });
+
+  let lastReason = 'no_media_url';
+  for (const targetUrl of orderedForDownload) {
+    // Skip Amazon product listing HTML pages (only try actual video streams or TikTok video pages)
+    if (
+      targetUrl.includes('amazon.') &&
+      (targetUrl.includes('/dp/') || targetUrl.includes('/gp/')) &&
+      !targetUrl.endsWith('.mp4') &&
+      !targetUrl.endsWith('.m3u8')
+    ) {
+      continue;
+    }
+    try {
+      const dlRes = await downloadMedia(
+        targetUrl,
+        asset.id,
+        mediaType,
+        60 * 1024 * 1024,
+        signal || AbortSignal.timeout(20_000),
+        true,
+        'high'
+      );
+      if (
+        dlRes.status === 'verified_available' &&
+        dlRes.localFilePath &&
+        fs.existsSync(dlRes.localFilePath)
+      ) {
+        const st = fs.statSync(dlRes.localFilePath);
+        if (st.size > 1024) {
+          return {
+            status: 'ready',
+            localFilePath: dlRes.localFilePath,
+            fileSizeBytes: st.size,
+          };
+        }
+      }
+      lastReason = dlRes.error || dlRes.status || 'download_failed';
+    } catch (err) {
+      lastReason = (err as Error)?.message || 'download_exception';
+    }
+  }
+
+  if (candidateUrls.length > 0) {
+    return {
+      status: 'link_only',
+      reason: lastReason,
+    };
+  }
+
+  return {
+    status: 'failed',
+    reason: lastReason,
   };
 }

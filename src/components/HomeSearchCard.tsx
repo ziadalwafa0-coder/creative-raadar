@@ -1,140 +1,270 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext.tsx';
-import { Upload, X, RefreshCw, Video, Image as ImageIcon, Layers, Link as LinkIcon, ExternalLink } from 'lucide-react';
-import { Project } from '../types/index.ts';
-import { analyzeCommercialName, compareCandidateImages, type IdentityCandidate } from '../utils/productVision.ts';
-import { analyzeImageWithGemini, prepareIdentityImage } from '../utils/geminiIdentity.ts';
-import type { VisualAttribute } from '../types/index.ts';
+import {
+  Upload,
+  X,
+  RefreshCw,
+  Video,
+  Image as ImageIcon,
+  Layers,
+  Link as LinkIcon,
+  ExternalLink,
+  Sparkles,
+  Loader2,
+  CheckCircle2,
+  Plus,
+  ShieldCheck,
+  Ban,
+} from 'lucide-react';
+import { Project, IdentityCardV2Client, MatchMode } from '../types/index.ts';
+
+interface GeminiCommercialIdentity {
+  commercialNameEn: string;
+  commercialNameAr: string;
+  amazonQueries: string[];
+  identityCard?: IdentityCardV2Client;
+}
+
 
 export const HomeSearchCard: React.FC = () => {
   const {
-    setCurrentProject,
-    setActiveTab,
+    showToast,
     apiFetch,
     droppedFile,
     setDroppedFile,
     startStreamingSearch,
     cancelStreamingSearch,
+    autoResolvedProductName,
   } = useApp();
 
   const [productName, setProductName] = useState('');
   const [productUrl, setProductUrl] = useState('');
+  const [sourcePlatform, setSourcePlatform] = useState<'amazon' | 'tiktok' | 'all'>('all');
   const [mediaType, setMediaType] = useState<Project['mediaTypeRequested']>('video');
-  const [platform,setPlatform]=useState<'amazon'|'tiktok'|'all'>('amazon');
-  const [amazonInput,setAmazonInput]=useState('5');
-  const [tiktokInput,setTiktokInput]=useState('5');
   const [targetVideoInput, setTargetVideoInput] = useState<string>('10');
+  const [targetAmazonVideoInput, setTargetAmazonVideoInput] = useState<string>('10');
+  const [targetTikTokVideoInput, setTargetTikTokVideoInput] = useState<string>('10');
   const [targetPhotoInput, setTargetPhotoInput] = useState<string>('10');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageRevision, setImageRevision] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isIdentifyingImage, setIsIdentifyingImage] = useState(false);
+  const [geminiIdentity, setGeminiIdentity] = useState<GeminiCommercialIdentity | null>(null);
+  const [mustMatchChips, setMustMatchChips] = useState<string[]>([]);
+  const [mustNotBeChips, setMustNotBeChips] = useState<string[]>([]);
+  const [attributeStrengths, setAttributeStrengths] = useState<Record<string, 'HARD' | 'SOFT' | 'IGNORE'>>({});
+  const [newMustMatchInput, setNewMustMatchInput] = useState('');
+  const [newMustNotBeInput, setNewMustNotBeInput] = useState('');
+  const [matchMode, setMatchMode] = useState<MatchMode>('same_design');
+  const [includeSimilar, setIncludeSimilar] = useState<boolean>(false);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [commercialName, setCommercialName] = useState('');
-  const [autoListing,setAutoListing]=useState<IdentityCandidate|null>(null);
-  const [similarReviews,setSimilarReviews]=useState(false);
-  const [allowSimilar,setAllowSimilar]=useState(false);
-  const [scanProgress, setScanProgress] = useState('');
-  const [isScanning, setIsScanning] = useState(false);
-  const [identityCandidates, setIdentityCandidates] = useState<IdentityCandidate[]>([]);
-  const visionController = useRef<AbortController | null>(null);
-  const identityRequestRef = useRef<AbortController | null>(null);
+  const [identityFailedErrorAr, setIdentityFailedErrorAr] = useState<string | null>(null);
+  const [showManualIdentityForm, setShowManualIdentityForm] = useState<boolean>(false);
+  const [manualFormFactor, setManualFormFactor] = useState<string>('');
+  const [manualMechanism, setManualMechanism] = useState<string>('');
+  const [geminiBudget, setGeminiBudget] = useState<{
+    used: number;
+    max: number;
+    remaining: number;
+    exhausted: boolean;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageReaderRef = useRef<FileReader | null>(null);
-  const nameHintRef = useRef(productName);
-  nameHintRef.current = productName;
-  const commercialEditedRef = useRef(false);
-  const cloudProfileRef = useRef<VisualAttribute | null>(null);
-  const preparedImageRef = useRef('');
-  const analyzedNameRef = useRef('');
-  useEffect(() => () => imageReaderRef.current?.abort(), []);
+  const identifyPromiseRef = useRef<Promise<GeminiCommercialIdentity | null> | null>(null);
+
+  const inferDefaultStrength = (attr: string, idx: number): 'HARD' | 'SOFT' => {
+    const lower = attr.toLowerCase();
+    if (
+      /\b(colou?r|black|white|grey|gray|blue|red|green|pink|beige|brown|gold|silver|logo|brand|box|packaging|cable|adapter|count|nodes?|buttons?|led|light|strap|mesh|fabric|size|dimension)\b/i.test(
+        lower
+      )
+    ) {
+      return 'SOFT';
+    }
+    return idx < 4 ? 'HARD' : 'SOFT';
+  };
+
+  const refreshGeminiBudget = () => {
+    apiFetch('/api/gemini/budget')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && typeof data.max === 'number') {
+          setGeminiBudget(data);
+        }
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
-    const controller = new AbortController();
-    visionController.current = controller;
-    setAutoListing(null);setCommercialName(''); setIdentityCandidates([]); setScanProgress('');
-    commercialEditedRef.current = false;
-    cloudProfileRef.current = null; preparedImageRef.current = ''; analyzedNameRef.current = '';
-    if (!imagePreview) { setIsScanning(false); return () => controller.abort(); }
-    setIsScanning(true);
-    setScanProgress('جاري تحديد الاسم التجاري من صورة المنتج والاسم المكتوب…');
-    (async () => {
-      try {
-        await new Promise<void>((resolve,reject)=>{
-          const timer=setTimeout(resolve,450);
-          controller.signal.addEventListener('abort',()=>{clearTimeout(timer);reject(controller.signal.reason);},{once:true});
-        });
-        controller.signal.throwIfAborted();
-        const preparedImage = await prepareIdentityImage(imagePreview);
-        controller.signal.throwIfAborted();
-        preparedImageRef.current = preparedImage;
-        const nameHint = nameHintRef.current;
-        let query:string;
-        try {
-          const result=await analyzeImageWithGemini(preparedImage,nameHint,controller.signal,apiFetch);
-          controller.signal.throwIfAborted();
-          cloudProfileRef.current=result.profile;analyzedNameRef.current=nameHint;
-          query=result.query;
-        }catch{
-          controller.signal.throwIfAborted();
-          setScanProgress('جاري قراءة صورة المنتج على الجهاز…');
-          const identity=await analyzeCommercialName(await (await fetch(imagePreview)).blob(),controller.signal,
-            text=>{if(!controller.signal.aborted)setScanProgress(text);},nameHint);
-          query=identity.query;
-        }
-        controller.signal.throwIfAborted();
-        if(commercialEditedRef.current)return;
-        setScanProgress('جاري البحث عن المنتج على أمازون ومقارنة صور القوائم…');
-        const response=await apiFetch('/api/product-identity/candidates',{method:'POST',signal:controller.signal,
-          headers:{'Content-Type':'application/json'},body:JSON.stringify({query,productName:nameHint,
-            referenceImage:preparedImage,profile:cloudProfileRef.current,allowSimilar:false})});
-        const data=await response.json();
-        controller.signal.throwIfAborted();
-        if(!response.ok)throw Error(data.error||'تعذّر الوصول إلى قوائم أمازون.');
-        const products:IdentityCandidate[]=data.products||[];
-        let matches=products.filter(row=>data.verification==='gemini'&&data.approvedAsins?.includes(row.asin));
-        if(data.verification==='not-requested'&&products.length){
-          const scores=await compareCandidateImages(await (await fetch(imagePreview)).blob(),products,controller.signal,setScanProgress);
-          matches=products.filter(row=>scores.some(score=>score.id===row.asin&&score.accepted));
-        }
-        controller.signal.throwIfAborted();
-        if(commercialEditedRef.current)return;
-        if(matches.length===1){
-          setAutoListing(matches[0]);setCommercialName(matches[0].title);
-          setScanProgress('تمت مطابقة صورة المنتج تلقائيًا. الاسم الظاهر هو عنوان صفحته على أمازون.');
-        }else{
-          setIdentityCandidates(matches.length?matches:products);
-          setScanProgress(products.length?'ظهرت عدة احتمالات. اختَر صفحة المنتج الصحيحة.':'لم تتأكد مطابقة على أمازون. عدّل عبارة البحث أو أضف رابط المنتج.');
-        }
-      } catch (error) {
-        if (!controller.signal.aborted) setScanProgress(error instanceof Error ? error.message : 'تعذر تحليل الصورة؛ اكتب اسم البحث التجاري بالإنجليزية.');
-      } finally { if (!controller.signal.aborted) setIsScanning(false); }
-    })();
-    return () => { controller.abort(); identityRequestRef.current?.abort(); };
-  }, [imagePreview, imageRevision, productName]);
+    refreshGeminiBudget();
+  }, []);
 
-  const handleImageFile = (file?: File) => {
+  const syncIdentityPatchToServer = (
+    imageHash: string | undefined,
+    nextMustMatch: string[],
+    nextMustNotBe: string[],
+    nextStrengths?: Record<string, 'HARD' | 'SOFT' | 'IGNORE'>
+  ) => {
+    if (nextStrengths) {
+      apiFetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ attributeStrengthOverrides: nextStrengths }),
+      }).catch(() => {});
+    }
+    if (!imageHash) return;
+    apiFetch('/api/gemini/identity', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageHash,
+        mustMatch: nextMustMatch,
+        mustNotBe: nextMustNotBe,
+        attributeStrengths: nextStrengths || attributeStrengths,
+      }),
+    }).catch(() => {});
+  };
+
+  const runGeminiCommercialIdentification = async (
+    dataUrl: string
+  ): Promise<GeminiCommercialIdentity | null> => {
+    setIsIdentifyingImage(true);
+    setIdentityFailedErrorAr(null);
+    setShowManualIdentityForm(false);
+    setGeminiIdentity(null);
+    setMustMatchChips([]);
+    setMustNotBeChips([]);
+    setAttributeStrengths({});
+
+    const promise = (async (): Promise<GeminiCommercialIdentity | null> => {
+      try {
+        const res = await apiFetch('/api/gemini/identify-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image: dataUrl,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        refreshGeminiBudget();
+        if (
+          !res.ok ||
+          !data?.commercialNameEn ||
+          !data?.identityCard?.mustMatch?.length ||
+          !data?.identityCard?.mustNotBe?.length
+        ) {
+          const arabicErr =
+            data?.error ||
+            'تعذر استخراج بطاقة الهوية البصرية للمنتج (mustMatch / mustNotBe) بعد 3 محاولات. تم إيقاف البحث تلقائياً لمنع ظهور منتجات خاطئة — يرجى تعبئة نموذج الهوية اليدوي بالأسفل للمتابعة.';
+          setIdentityFailedErrorAr(arabicErr);
+          setShowManualIdentityForm(true);
+          return null;
+        }
+        const card: IdentityCardV2Client = data.identityCard || data.profile?.identityCardV2;
+        const resolved: GeminiCommercialIdentity = {
+          commercialNameEn: data.commercialNameEn,
+          commercialNameAr: data.commercialNameAr || '',
+          amazonQueries: Array.isArray(data.amazonQueries)
+            ? data.amazonQueries
+            : [data.commercialNameEn],
+          identityCard: card,
+        };
+        setGeminiIdentity(resolved);
+        setProductName(resolved.commercialNameEn);
+        const mm = card.mustMatch || [];
+        setMustMatchChips(mm);
+        setMustNotBeChips(card.mustNotBe || []);
+        const initialStrengths: Record<string, 'HARD' | 'SOFT' | 'IGNORE'> = {};
+        if (card.attributeStrengths) {
+          for (const [k, v] of Object.entries(card.attributeStrengths)) {
+            const up = String(v).toUpperCase();
+            initialStrengths[k] = up === 'HARD' ? 'HARD' : up === 'IGNORE' ? 'IGNORE' : 'SOFT';
+          }
+        }
+        mm.forEach((attr, idx) => {
+          if (!initialStrengths[attr]) {
+            initialStrengths[attr] = inferDefaultStrength(attr, idx);
+          }
+        });
+        setAttributeStrengths(initialStrengths);
+        return resolved;
+      } catch {
+        const arabicErr =
+          'تعذر الاتصال بخدمة التحليل البصري (Gemini) بعد 3 محاولات — يرجى تعبئة نموذج بطاقة الهوية اليدوي للمتابعة.';
+        setIdentityFailedErrorAr(arabicErr);
+        setShowManualIdentityForm(true);
+        return null;
+      } finally {
+        setIsIdentifyingImage(false);
+        identifyPromiseRef.current = null;
+      }
+    })();
+    identifyPromiseRef.current = promise;
+    return promise;
+  };
+
+  const compressImageForUpload = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      const objUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(objUrl);
+        const MAX_DIM = 960;
+        let { width, height } = img;
+        if (width > MAX_DIM || height > MAX_DIM) {
+          if (width > height) {
+            height = Math.round((height * MAX_DIM) / width);
+            width = MAX_DIM;
+          } else {
+            width = Math.round((width * MAX_DIM) / height);
+            height = MAX_DIM;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objUrl);
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      };
+      img.src = objUrl;
+    });
+  };
+
+  const handleImageFile = async (file?: File) => {
     if (!file) return;
     if (!file.type.startsWith('image/')) {
       setValidationError('يرجى اختيار ملف صورة صالح');
       return;
     }
-    if (file.size > 8 * 1024 * 1024) { setValidationError('اختَر صورة أصغر من 8 ميجابايت.'); return; }
-    visionController.current?.abort();
-    identityRequestRef.current?.abort();
-    imageReaderRef.current?.abort();
-    setIdentityCandidates([]);
     setValidationError(null);
-    const reader = new FileReader();
-    imageReaderRef.current = reader;
-    reader.onload = () => {
-      if (imageReaderRef.current === reader && typeof reader.result === 'string') {
-        setImagePreview(reader.result);
-        setImageRevision(revision => revision + 1);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const dataUrl = await compressImageForUpload(file);
+      setImagePreview(dataUrl);
+      runGeminiCommercialIdentification(dataUrl);
+    } catch {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        setImagePreview(dataUrl);
+        runGeminiCommercialIdentification(dataUrl);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   useEffect(() => {
@@ -143,6 +273,12 @@ export const HomeSearchCard: React.FC = () => {
       setDroppedFile(null);
     }
   }, [droppedFile]);
+
+  useEffect(() => {
+    if (autoResolvedProductName && autoResolvedProductName.trim()) {
+      setProductName(autoResolvedProductName.trim());
+    }
+  }, [autoResolvedProductName]);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     handleImageFile(e.target.files?.[0]);
@@ -160,17 +296,36 @@ export const HomeSearchCard: React.FC = () => {
     return Math.max(1, Math.min(500, Math.floor(val)));
   };
 
-  const sourceVideoCounts=platform==='all'&&mediaType!=='photo'
-    ? {amazon:clampCount(amazonInput),tiktok:clampCount(tiktokInput)} : undefined;
-  const videoTarget=sourceVideoCounts?sourceVideoCounts.amazon+sourceVideoCounts.tiktok:clampCount(targetVideoInput);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmedName = productName.trim();
-    const trimmedUrl = productUrl.trim() || autoListing?.url || '';
+    let currentIdentity = geminiIdentity;
+    if (identifyPromiseRef.current) {
+      currentIdentity = await Promise.race([
+        identifyPromiseRef.current,
+        new Promise<GeminiCommercialIdentity | null>((resolve) =>
+          setTimeout(() => resolve(geminiIdentity || null), 3500)
+        ),
+      ]);
+    }
+
+    const trimmedName = (productName || currentIdentity?.commercialNameEn || '').trim();
+    const trimmedUrl = productUrl.trim();
 
     if (!trimmedName && !trimmedUrl && !imagePreview) {
       setValidationError('يرجى كتابة اسم المنتج أو رفع صورته أو إدخال رابط مباشر لصفحة المنتج لبدء البحث');
+      return;
+    }
+
+    // Item 3 (FAIL CLOSED IDENTITY): If an image is attached, require either a resolved Identity Card OR manual mustMatch + mustNotBe + nameEn
+    if (
+      imagePreview &&
+      (!trimmedName || mustMatchChips.length === 0 || mustNotBeChips.length === 0)
+    ) {
+      setShowManualIdentityForm(true);
+      setValidationError(
+        identityFailedErrorAr ||
+          'لا يمكن بدء البحث بالصورة بدون تحديد مواصفات التصميم الإلزامية (mustMatch) والمستبعدات (mustNotBe). يرجى استكمال بطاقة الهوية اليدوية أولاً.'
+      );
       return;
     }
 
@@ -183,85 +338,52 @@ export const HomeSearchCard: React.FC = () => {
     setIsSubmitting(true);
     cancelStreamingSearch();
 
-    const safeVideoCount = videoTarget;
+    const safeSingleVideoCount = clampCount(targetVideoInput);
+    const safeAmazonVideoCount = clampCount(targetAmazonVideoInput);
+    const safeTikTokVideoCount = clampCount(targetTikTokVideoInput);
     const safePhotoCount = clampCount(targetPhotoInput);
-    if(!sourceVideoCounts)setTargetVideoInput(String(safeVideoCount));
+    setTargetVideoInput(String(safeSingleVideoCount));
+    setTargetAmazonVideoInput(String(safeAmazonVideoCount));
+    setTargetTikTokVideoInput(String(safeTikTokVideoCount));
     setTargetPhotoInput(String(safePhotoCount));
 
-    const effectiveName = trimmedName || trimmedUrl || (imagePreview ? 'بحث بالصورة' : '');
+    const effectiveVideoCount =
+      sourcePlatform === 'all'
+        ? safeAmazonVideoCount + safeTikTokVideoCount
+        : safeSingleVideoCount;
+
+    const effectiveName =
+      trimmedName ||
+      currentIdentity?.commercialNameEn ||
+      trimmedUrl ||
+      (imagePreview ? 'بحث بالصورة' : '');
 
     try {
-      let selectedUrl = trimmedUrl;
-      let selectedImage=imagePreview;
-      let selectedTitle=(!productUrl.trim() && autoListing?.title)||effectiveName;
-      if(platform==='tiktok'){
-        if(isScanning)throw Error('انتظر اكتمال قراءة الصورة.');
-        const query=commercialName.trim()||trimmedName;
-        if(!query)throw Error('اكتب اسم المنتج للبحث على TikTok.');
-        await startStreamingSearch({referenceImage:imagePreview,productUrl:trimmedUrl||undefined,productName:query,mediaType:'video',sourcePlatform:'tiktok',targetVideoCount:safeVideoCount,targetPhotoCount:0});
-        return;
-      }
-      let expansionQuery = commercialName.trim();
-      if (imagePreview && !trimmedUrl) {
-        if (isScanning) throw new Error('انتظر اكتمال تحليل الصورة أولًا.');
-        let query = commercialName.trim() || (!/[\u0600-\u06ff]/.test(trimmedName) ? trimmedName : '');
-        if (!query) throw new Error('اكتب اسم البحث التجاري بالإنجليزية لتحديد المنتج من الصورة.');
-        const controller = new AbortController();
-        identityRequestRef.current?.abort(); identityRequestRef.current = controller;
-        if (cloudProfileRef.current && analyzedNameRef.current !== trimmedName) {
-          setScanProgress('جاري تحديث الاسم التجاري باستخدام الاسم والصورة معًا…');
-          const refined = await analyzeImageWithGemini(preparedImageRef.current, trimmedName, controller.signal, apiFetch);
-          controller.signal.throwIfAborted();
-          cloudProfileRef.current = refined.profile; analyzedNameRef.current = trimmedName;
-          if (!commercialEditedRef.current) { query = refined.query; }
-        }
-        setScanProgress(`البحث على أمازون عن: ${query} ثم مقارنة صور المنتجات…`);
-        const response = await apiFetch('/api/product-identity/candidates', {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, signal: controller.signal,
-          body: JSON.stringify({query, productName: trimmedName, allowSimilar, referenceImage:cloudProfileRef.current ? preparedImageRef.current : undefined, profile:cloudProfileRef.current || undefined}),
-        });
-        const data = await response.json();
-        controller.signal.throwIfAborted();
-        if (!response.ok) throw new Error(data.error || 'تعذر قراءة صور نتائج أمازون.');
-        const products: IdentityCandidate[] = data.products || [];
-        if(!products.length && data.diagnostics?.reason==='SEARCH_BLOCKED'){
-          if(platform==='all' && sourceVideoCounts){
-            await startStreamingSearch({productName:query,mediaType,sourcePlatform:'all',sourceVideoCounts,
-              amazonDiscoveryBlocked:true,targetVideoCount:safeVideoCount,targetPhotoCount:safePhotoCount,
-              referenceImage:imagePreview});
-            return;
-          }
-          document.getElementById('product-link-options')?.setAttribute('open','');
-          document.getElementById('product-url-input')?.focus();
-          throw new Error('تعذّر العثور على صفحة مؤكدة من البحث. الصق رابط نفس المنتج من أمازون في خانة الرابط المباشر واضغط ابدأ البحث.');
-        }
-        if (!products.length) throw new Error(data.diagnostics?.reason === 'REFERENCE_UNCERTAIN'
-          ? 'تحليل الصورة غير حاسم. جرّب لقطة أوضح للمنتج أو أضف رابط صفحته للتأكيد.'
-          : data.diagnostics?.sourceIncomplete
-          ? 'تعذر قراءة صور بعض النتائج؛ لم نتمكن من تأكيد المطابقة. أعد المحاولة أو أضف رابط نفس المنتج.'
-          : data.diagnostics?.reason === 'NO_READABLE_PRODUCTS'
-          ? 'لم تظهر نتائج منتجات قابلة للفحص بالأسماء المستخدمة. عدّل اسم البحث التجاري أو أضف رابط نفس المنتج.'
-          : `لم نؤكد تطابقًا ضمن ${data.diagnostics?.checkedCount || 0} صورة تم فحصها. جرّب اسمًا أدق أو أضف رابط نفس المنتج؛ هذا لا يعني أنه غير موجود على أمازون.`);
-        setIdentityCandidates(products.slice(0,8));
-        setScanProgress('اختَر صفحة المنتج الصحيحة لتثبيت البحث عليها.');
-        return;
-      }
       await startStreamingSearch({
-        productName: selectedTitle,
-        productUrl: selectedUrl || undefined,
+        productName: effectiveName,
+        productUrl: trimmedUrl || undefined,
         mediaType,
-        sourcePlatform: platform, similarReviews, sourceVideoCounts,
-        targetVideoCount: safeVideoCount,
+        sourcePlatform,
+        targetVideoCount: effectiveVideoCount,
+        targetAmazonVideoCount: sourcePlatform === 'all' ? safeAmazonVideoCount : undefined,
+        targetTikTokVideoCount: sourcePlatform === 'all' ? safeTikTokVideoCount : undefined,
         targetPhotoCount: safePhotoCount,
-        referenceImage: selectedImage,
-        imageConfirmedLocally: Boolean(imagePreview && selectedUrl),
-        verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:expansionQuery,profile:cloudProfileRef.current} : undefined,
+        referenceImage: imagePreview,
+        matchMode,
+        includeSimilar,
+        mustMatch: mustMatchChips.length > 0 ? mustMatchChips : currentIdentity?.identityCard?.mustMatch,
+        mustNotBe: mustNotBeChips.length > 0 ? mustNotBeChips : currentIdentity?.identityCard?.mustNotBe,
+        identityCard: currentIdentity?.identityCard
+          ? {
+              ...currentIdentity.identityCard,
+              mustMatch: mustMatchChips.length > 0 ? mustMatchChips : currentIdentity.identityCard.mustMatch,
+              mustNotBe: mustNotBeChips.length > 0 ? mustNotBeChips : currentIdentity.identityCard.mustNotBe,
+              attributeStrengths,
+            }
+          : null,
       });
     } catch (error: any) {
-      if (error?.name !== 'AbortError') {
-        const message = error.message || 'حدث خطأ أثناء بدء البحث';
-        setValidationError(message); setScanProgress('توقّف البحث قبل اختيار المنتج؛ لم نستخدم نتائج غير مؤكدة.');
-      }
+      showToast(error.message || 'حدث خطأ أثناء بدء البحث', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -272,53 +394,50 @@ export const HomeSearchCard: React.FC = () => {
       ? productUrl.trim()
       : productName.trim() && /^https?:\/\//i.test(productName.trim())
       ? productName.trim()
-      : (commercialName.trim() || productName.trim())
-      ? `https://www.amazon.com/s?k=${encodeURIComponent(commercialName.trim() || productName.trim())}`
+      : (geminiIdentity?.commercialNameEn || productName.trim())
+      ? sourcePlatform === 'tiktok'
+        ? `https://www.tiktok.com/search/video?q=${encodeURIComponent(
+            geminiIdentity?.commercialNameEn || productName.trim()
+          )}`
+        : `https://www.amazon.com/s?k=${encodeURIComponent(
+            geminiIdentity?.commercialNameEn || productName.trim()
+          )}`
+      : sourcePlatform === 'tiktok'
+      ? 'https://www.tiktok.com'
       : 'https://www.amazon.com';
 
   return (
     <div className="w-full max-w-[760px] mx-auto">
-      <section className="radaar-hero radaar-enter">
-        <div><p lang="en" dir="ltr">CREATIVE RADAAR</p><h1>اكتشف فيديوهات منتجك</h1>
-        <span>ارفع صورة المنتج أو اكتب اسمه، واختَر المصادر اللي تناسبك.</span></div>
-        <div className="radaar-orbit" aria-hidden="true"><i/><b/></div>
-      </section>
       <form
         onSubmit={handleSubmit}
-        className="radaar-panel bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-5 sm:p-7 space-y-5"
+        className="bg-white rounded-2xl border border-[#E2E5DF] shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-5 sm:p-7 space-y-5"
       >
-        <h2 className="radaar-step"><b aria-hidden="true">١</b> حدّد المنتج</h2>
+        {/* 1) Large Drag/Drop Product Image Box + Gemini Vision Commercial Name Layer */}
         <div>
-          <label
-            htmlFor="product-name-input"
-            className="block text-sm font-semibold text-[#181B1A] mb-2"
-          >
-            اسم المنتج
-          </label>
-          <input
-            id="product-name-input"
-            type="text"
-            value={productName}
-            onChange={(e) => {
-              identityRequestRef.current?.abort();
-              setProductName(e.target.value);
-              setIdentityCandidates([]);
-              visionController.current?.abort();
-              cloudProfileRef.current=null;
-              setCommercialName('');
-              setAutoListing(null);
-              if (validationError) setValidationError(null);
-            }}
-            placeholder="أدخل اسم المنتج (مثال: جزامة 9 دور بغطاء)..."
-            className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
-          />
-        </div>
+          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <label className="block text-sm font-semibold text-[#181B1A]">
+              صورة المنتج (طبقة التعرف التجاري الذكي عبر Gemini)
+            </label>
+            <div className="flex items-center gap-2 flex-wrap">
+              {geminiBudget && (
+                <span
+                  className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg border ${
+                    geminiBudget.exhausted
+                      ? 'bg-amber-50 text-amber-800 border-amber-300'
+                      : 'bg-[#FAFBF9] text-[#616764] border-[#E2E5DF]'
+                  }`}
+                  title="ميزانية التحقق البصري اليومية عبر Gemini"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#247C72]" />
+                  <span>
+                    ميزانية Gemini اليومية: {geminiBudget.remaining}/{geminiBudget.max} متبقي
+                    {geminiBudget.exhausted ? ' (مستنفدة — وضع محلي فقط)' : ''}
+                  </span>
+                </span>
+              )}
 
-        {/* 1) Large Drag/Drop Product Image Box */}
-        <div>
-          <label className="block text-sm font-semibold text-[#181B1A] mb-2">
-            صورة المنتج (مرجع اختياري)
-          </label>
+            </div>
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -329,7 +448,6 @@ export const HomeSearchCard: React.FC = () => {
 
           {!imagePreview ? (
             <div
-              role="button" tabIndex={0} aria-label="رفع صورة المنتج" onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fileInputRef.current?.click();}}}
               onDragOver={(e) => {
                 e.preventDefault();
                 setIsDragging(true);
@@ -337,7 +455,7 @@ export const HomeSearchCard: React.FC = () => {
               onDragLeave={() => setIsDragging(false)}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
-              className={`radaar-upload cursor-pointer rounded-xl border-2 border-dashed transition-all p-7 sm:p-9 text-center flex flex-col items-center justify-center gap-2.5 ${
+              className={`cursor-pointer rounded-xl border-2 border-dashed transition-all p-7 sm:p-9 text-center flex flex-col items-center justify-center gap-2.5 ${
                 isDragging
                   ? 'border-[#247C72] bg-[#EAF3F2]/50'
                   : 'border-[#D5D9D2] bg-[#FAFBF9] hover:border-[#247C72]/60 hover:bg-[#F6F7F4]'
@@ -347,96 +465,485 @@ export const HomeSearchCard: React.FC = () => {
                 <Upload className="w-5 h-5" />
               </div>
               <p className="text-sm font-medium text-[#181B1A]">
-                اسحب وأفلت صورة المنتج هنا كمرجع، أو اضغط للاختيار
+                اسحب وأفلت صورة المنتج هنا ليتعرف Gemini على اسمه التجاري في أمازون، أو اضغط للاختيار
               </p>
               <p className="text-xs text-[#616764]">PNG, JPG, WEBP</p>
             </div>
           ) : (
-            <div className="rounded-xl border border-[#E2E5DF] bg-[#FAFBF9] p-4 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3.5 min-w-0">
-                <img
-                  src={imagePreview}
-                  alt="معاينة المنتج"
-                  className="w-16 h-16 rounded-lg object-cover border border-[#E2E5DF] bg-white shrink-0"
-                />
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-[#181B1A] truncate">
-                    تم إرفاق صورة مرجعية للمنتج
-                  </p>
-                  <p className="text-xs text-[#247C72] bg-[#EAF3F2] border border-[#247C72]/30 px-2 py-0.5 rounded-md mt-1 inline-block font-medium">
-                    تحديد اسم المنتج التجاري من الصورة
-                  </p>
+            <div className="rounded-xl border border-[#E2E5DF] bg-[#FAFBF9] p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <img
+                    src={imagePreview}
+                    alt="معاينة المنتج"
+                    className="w-16 h-16 rounded-lg object-cover border border-[#E2E5DF] bg-white shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-[#181B1A] truncate">
+                      {geminiIdentity?.commercialNameAr || 'تم إرفاق صورة مرجعية للمنتج'}
+                    </p>
+                    <p className="text-xs text-[#247C72] bg-[#EAF3F2] border border-[#247C72]/30 px-2 py-0.5 rounded-md mt-1 inline-flex items-center gap-1 font-medium">
+                      <Sparkles className="w-3 h-3" />
+                      <span>طبقة Gemini: التعرف على المنتج ثم البحث باسمه التجاري على أمازون</span>
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-[#E2E5DF] text-[#181B1A] hover:bg-[#F6F7F4] flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>استبدال</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImagePreview(null);
+                      setGeminiIdentity(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-[#E2E5DF] text-red-600 hover:bg-red-50 flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>إزالة</span>
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-[#E2E5DF] text-[#181B1A] hover:bg-[#F6F7F4] flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>استبدال</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    imageReaderRef.current?.abort();
-                    imageReaderRef.current = null;
-                    setImagePreview(null);
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                  }}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-[#E2E5DF] text-red-600 hover:bg-red-50 flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>إزالة</span>
-                </button>
-              </div>
+
+              {isIdentifyingImage && (
+                <div className="rounded-lg bg-white border border-[#E2E5DF] px-3.5 py-2.5 flex items-center gap-2.5 text-xs text-[#247C72] font-medium">
+                  <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                  <span>جاري فحص صورة المنتج عبر Gemini (حتى 3 محاولات بمهلة 25 ثانية) وتحديد mustMatch / mustNotBe...</span>
+                </div>
+              )}
+
+              {/* Item 3 (FAIL CLOSED IDENTITY): Arabic Error Banner + Editable Manual Identity Card Form */}
+              {identityFailedErrorAr && !isIdentifyingImage && (
+                <div className="rounded-xl bg-red-50 border border-red-200 p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-xs font-bold text-red-800 leading-relaxed">
+                      {identityFailedErrorAr}
+                    </div>
+                  </div>
+
+                  {showManualIdentityForm && (
+                    <div className="bg-white rounded-lg border border-red-200 p-3.5 space-y-3">
+                      <div className="text-xs font-bold text-[#181B1A]">
+                        نموذج بطاقة الهوية البصرية اليدوي (إلزامي عند تعذر التحليل التلقائي):
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#616764] mb-1">
+                            الاسم التجاري بالإنجليزية (Required):
+                          </label>
+                          <input
+                            type="text"
+                            dir="ltr"
+                            value={productName}
+                            onChange={(e) => setProductName(e.target.value)}
+                            placeholder="e.g. Photocatalyst Suction Mosquito Killer"
+                            className="w-full h-8 px-2.5 text-xs rounded border border-[#E2E5DF] bg-[#FAFBF9]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-[#616764] mb-1">
+                            الشكل الهندسي وآلية العمل:
+                          </label>
+                          <input
+                            type="text"
+                            dir="ltr"
+                            value={manualFormFactor}
+                            onChange={(e) => setManualFormFactor(e.target.value)}
+                            placeholder="e.g. Cylindrical USB suction fan trap"
+                            className="w-full h-8 px-2.5 text-xs rounded border border-[#E2E5DF] bg-[#FAFBF9]"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-end">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!productName.trim() || mustMatchChips.length === 0 || mustNotBeChips.length === 0) {
+                              setValidationError(
+                                'يرجى إدخال الاسم التجاري وإضافة سمة إلزامية (mustMatch) ومستبعد (mustNotBe) واحد على الأقل.'
+                              );
+                              return;
+                            }
+                            const res = await apiFetch('/api/gemini/identity-manual', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                nameEn: productName.trim(),
+                                nameAr: productName.trim(),
+                                formFactorShape: manualFormFactor || productName.trim(),
+                                mechanismHowItWorks: manualMechanism || productName.trim(),
+                                mustMatch: mustMatchChips,
+                                mustNotBe: mustNotBeChips,
+                              }),
+                            });
+                            if (res.ok) {
+                              const data = await res.json();
+                              setGeminiIdentity({
+                                commercialNameEn: data.commercialNameEn,
+                                commercialNameAr: data.commercialNameAr,
+                                amazonQueries: data.amazonQueries || [data.commercialNameEn],
+                                identityCard: data.identityCard,
+                              });
+                              setIdentityFailedErrorAr(null);
+                              setShowManualIdentityForm(false);
+                              setValidationError(null);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-[#247C72] text-white text-xs font-bold hover:bg-[#1E665E] cursor-pointer"
+                        >
+                          حفظ الهوية اليدوية وتفعيل البحث
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {(geminiIdentity || showManualIdentityForm) && !isIdentifyingImage && (
+                <div className="rounded-lg bg-white border border-[#247C72]/30 p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-[#247C72]">
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>بطاقة هوية المنتج البصرية (Identity Card v3 — Discriminator Schema):</span>
+                    </div>
+                    <span
+                      dir="ltr"
+                      className="text-xs font-bold text-[#181B1A] bg-[#EAF3F2] px-2.5 py-1 rounded-md"
+                    >
+                      {geminiIdentity?.commercialNameEn || productName || 'Manual Identity'}
+                    </span>
+                  </div>
+
+                  {geminiIdentity?.identityCard && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] bg-[#FAFBF9] border border-[#E2E5DF] rounded-lg p-2.5">
+                      <div>
+                        <span className="font-semibold text-[#616764]">الشكل والتصميم (Form Factor): </span>
+                        <span className="text-[#181B1A] font-medium" dir="ltr">
+                          {geminiIdentity.identityCard.formFactor.shape}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="font-semibold text-[#616764]">آلية العمل (Mechanism): </span>
+                        <span className="text-[#181B1A] font-medium" dir="ltr">
+                          {geminiIdentity.identityCard.mechanism.howItWorks}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Phase 2.4: Identity v3 Discriminators (up to 5 HARD/SOFT with evidencePhrase) */}
+                  {geminiIdentity?.identityCard?.discriminators &&
+                    geminiIdentity.identityCard.discriminators.length > 0 && (
+                      <div
+                        data-testid="identity-v3-discriminators"
+                        className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1.5"
+                      >
+                        <div className="text-[11px] font-bold text-slate-800">
+                          السمات التمييزية الدقيقة (Discriminators — بحد أقصى 5 سمات تفصل هذا التصميم عن أشباهه):
+                        </div>
+                        <div className="grid grid-cols-1 gap-1.5">
+                          {geminiIdentity.identityCard.discriminators.slice(0, 5).map((disc) => (
+                            <div
+                              key={disc.id}
+                              dir="ltr"
+                              className="flex items-start justify-between gap-2 bg-white px-2.5 py-1.5 rounded border border-slate-200 text-[11px]"
+                            >
+                              <div className="min-w-0">
+                                <span
+                                  className={`inline-block text-[9px] font-bold px-1.5 py-0.2 rounded mr-1.5 ${
+                                    disc.strength === 'hard'
+                                      ? 'bg-red-600 text-white'
+                                      : 'bg-teal-600 text-white'
+                                  }`}
+                                >
+                                  {disc.strength}
+                                </span>
+                                <span className="font-bold text-slate-900">{disc.nameAr || disc.name}: </span>
+                                <span className="text-slate-700">{disc.expectedValue}</span>
+                                <div className="text-[10px] text-slate-500 mt-0.5">
+                                  Evidence: {disc.evidencePhrase}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  {/* Editable mustMatch chips with HARD/SOFT/IGNORE toggle */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>مواصفات التصميم (اضغط على HARD/SOFT لتغيير صرامة كل شرط):</span>
+                      </div>
+                      <span className="text-[10px] text-[#616764]">
+                        HARD = شرط قاطع (يرفض المنتج) | SOFT = تفصيل مرن (يخفض الدرجة فقط) | IGNORE = تجاهل
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {mustMatchChips.map((chip, idx) => {
+                        const strength = attributeStrengths[chip] || inferDefaultStrength(chip, idx);
+                        const nextStrength: 'HARD' | 'SOFT' | 'IGNORE' =
+                          strength === 'HARD' ? 'SOFT' : strength === 'SOFT' ? 'IGNORE' : 'HARD';
+                        const badgeClass =
+                          strength === 'HARD'
+                            ? 'bg-red-600 text-white'
+                            : strength === 'SOFT'
+                            ? 'bg-teal-600 text-white'
+                            : 'bg-slate-400 text-white';
+                        return (
+                          <span
+                            key={`mm-${idx}-${chip}`}
+                            dir="ltr"
+                            className={`inline-flex items-center gap-1 text-[11px] font-medium border px-2 py-0.5 rounded-md ${
+                              strength === 'IGNORE'
+                                ? 'bg-slate-100 text-slate-400 border-slate-200 line-through'
+                                : strength === 'HARD'
+                                ? 'bg-emerald-50 text-emerald-950 border-emerald-300'
+                                : 'bg-teal-50/60 text-teal-900 border-teal-200'
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = { ...attributeStrengths, [chip]: nextStrength };
+                                setAttributeStrengths(updated);
+                                syncIdentityPatchToServer(
+                                  geminiIdentity?.identityCard?.imageHash,
+                                  mustMatchChips,
+                                  mustNotBeChips,
+                                  updated
+                                );
+                              }}
+                              title="اضغط للتبديل بين HARD (صارم) و SOFT (مرن) و IGNORE (تجاهل)"
+                              className={`text-[9px] font-bold px-1.5 py-0.2 rounded cursor-pointer ${badgeClass}`}
+                            >
+                              {strength}
+                            </button>
+                            <span>{chip}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = mustMatchChips.filter((_, i) => i !== idx);
+                                setMustMatchChips(next);
+                                syncIdentityPatchToServer(
+                                  geminiIdentity?.identityCard?.imageHash,
+                                  next,
+                                  mustNotBeChips,
+                                  attributeStrengths
+                                );
+                              }}
+                              className="text-emerald-700 hover:text-red-600 cursor-pointer"
+                              title="حذف السمة"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                      <div className="inline-flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={newMustMatchInput}
+                          onChange={(e) => setNewMustMatchInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const v = newMustMatchInput.trim();
+                              if (v && !mustMatchChips.includes(v)) {
+                                const next = [...mustMatchChips, v];
+                                const updatedStrengths = { ...attributeStrengths, [v]: 'SOFT' as const };
+                                setMustMatchChips(next);
+                                setAttributeStrengths(updatedStrengths);
+                                setNewMustMatchInput('');
+                                syncIdentityPatchToServer(
+                                  geminiIdentity?.identityCard?.imageHash,
+                                  next,
+                                  mustNotBeChips,
+                                  updatedStrengths
+                                );
+                              }
+                            }
+                          }}
+                          placeholder="+ أضف سمة"
+                          className="h-6 px-2 text-[11px] rounded border border-[#E2E5DF] bg-[#FAFBF9] focus:bg-white focus:outline-none focus:border-[#247C72] w-32"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const v = newMustMatchInput.trim();
+                            if (v && !mustMatchChips.includes(v)) {
+                              const next = [...mustMatchChips, v];
+                              const updatedStrengths = { ...attributeStrengths, [v]: 'SOFT' as const };
+                              setMustMatchChips(next);
+                              setAttributeStrengths(updatedStrengths);
+                              setNewMustMatchInput('');
+                              syncIdentityPatchToServer(
+                                geminiIdentity?.identityCard?.imageHash,
+                                next,
+                                mustNotBeChips,
+                                updatedStrengths
+                              );
+                            }
+                          }}
+                          className="h-6 px-1.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-[11px] flex items-center cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Editable mustNotBe chips */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-red-800">
+                      <Ban className="w-3.5 h-3.5 text-red-600" />
+                      <span>منتجات شبيهة مستبعدة تماماً (Must Not Be — تمنع قبول أنواع أخرى):</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {mustNotBeChips.map((chip, idx) => (
+                        <span
+                          key={`mnb-${idx}-${chip}`}
+                          dir="ltr"
+                          className="inline-flex items-center gap-1 text-[11px] font-medium bg-red-50 text-red-900 border border-red-200 px-2 py-0.5 rounded-md"
+                        >
+                          <span>{chip}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = mustNotBeChips.filter((_, i) => i !== idx);
+                              setMustNotBeChips(next);
+                              syncIdentityPatchToServer(
+                                geminiIdentity?.identityCard?.imageHash,
+                                mustMatchChips,
+                                next
+                              );
+                            }}
+                            className="text-red-700 hover:text-red-950 cursor-pointer"
+                            title="حذف الاستبعاد"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                      <div className="inline-flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={newMustNotBeInput}
+                          onChange={(e) => setNewMustNotBeInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const v = newMustNotBeInput.trim();
+                              if (v && !mustNotBeChips.includes(v)) {
+                                const next = [...mustNotBeChips, v];
+                                setMustNotBeChips(next);
+                                setNewMustNotBeInput('');
+                                syncIdentityPatchToServer(
+                                  geminiIdentity?.identityCard?.imageHash,
+                                  mustMatchChips,
+                                  next
+                                );
+                              }
+                            }
+                          }}
+                          placeholder="+ استبعد نوعاً مشابهاً"
+                          className="h-6 px-2 text-[11px] rounded border border-[#E2E5DF] bg-[#FAFBF9] focus:bg-white focus:outline-none focus:border-red-400 w-36"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const v = newMustNotBeInput.trim();
+                            if (v && !mustNotBeChips.includes(v)) {
+                              const next = [...mustNotBeChips, v];
+                              setMustNotBeChips(next);
+                              setNewMustNotBeInput('');
+                              syncIdentityPatchToServer(
+                                geminiIdentity?.identityCard?.imageHash,
+                                mustMatchChips,
+                                next
+                              );
+                            }
+                          }}
+                          className="h-6 px-1.5 rounded bg-red-100 hover:bg-red-200 text-red-800 text-[11px] flex items-center cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {geminiIdentity && geminiIdentity.amazonQueries.length > 1 && (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-[#F0F2EE]">
+                      <span className="text-[11px] text-[#616764]">كلمات البحث التجارية:</span>
+                      {Array.from(new Set(geminiIdentity.amazonQueries)).slice(0, 4).map((q, idx) => (
+                        <button
+                          key={`${q}-${idx}`}
+                          type="button"
+                          dir="ltr"
+                          onClick={() => setProductName(q)}
+                          className="text-[11px] px-2 py-0.5 rounded bg-[#FAFBF9] hover:bg-[#EAF3F2] border border-[#E2E5DF] text-[#181B1A] transition-colors cursor-pointer"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* 2) Product Name Field */}
-        {imagePreview && (
-          <div className="space-y-2 rounded-xl bg-[#EAF3F2] p-4">
-            <label htmlFor="commercial-query" className="block text-sm font-semibold text-[#181B1A]">الاسم التجاري للبحث على أمازون</label>
-            <label className="flex gap-2 items-center text-sm"><input type="checkbox" checked={allowSimilar} onChange={e=>{identityRequestRef.current?.abort();setIdentityCandidates([]);setAllowSimilar(e.target.checked);}}/>عرض المنتجات الرائجة من نفس النوع ولو اختلف التصميم</label>
-            <input id="commercial-query" value={commercialName} onChange={event => { identityRequestRef.current?.abort(); commercialEditedRef.current = true;setAutoListing(null); setCommercialName(event.target.value); setIdentityCandidates([]); }} dir="ltr" placeholder="مثال: Microfiber Spray Mop Refillable Bottle" className="w-full h-11 px-3 rounded-lg border border-[#D5D9D2] bg-white text-sm" />
-            {autoListing && <a href={autoListing.url} target="_blank" rel="noopener noreferrer" className="text-xs underline text-[#247C72]">عرض صفحة المنتج المطابق على أمازون</a>}
-            <p data-scanning={isScanning} role="status"  className="text-xs text-[#247C72]">{scanProgress}</p>
-
-            <p className="text-xs text-[#616764]">بنستخدم نسخة مصغّرة من الصورة لمقارنة التصميم. تقدر تعدّل الاسم لو النتيجة محتاجة توضيح.</p>
+        <div>
+          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <label
+              htmlFor="product-name-input"
+              className="block text-sm font-semibold text-[#181B1A]"
+            >
+              اسم المنتج (يُحدَّث تلقائياً إذا لم يُعثر على الاسم الأول في أمازون)
+            </label>
+            {autoResolvedProductName && (
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#247C72] bg-[#EAF3F2] border border-[#247C72]/30 px-2.5 py-0.5 rounded-md">
+                <RefreshCw className="w-3 h-3" />
+                <span>الاسم النشط في أمازون: {autoResolvedProductName}</span>
+              </span>
+            )}
           </div>
-        )}
-        {identityCandidates.length > 0 && (
-          <section aria-label="تأكيد نفس المنتج" className="space-y-3">
-            <p className="text-sm font-semibold">اختَر نفس المنتج؛ لو مش موجود عدّل اسم البحث.</p>
-            <div className="grid grid-cols-2 gap-3">
-              {identityCandidates.map(candidate => <div key={candidate.asin} className="rounded-xl border border-[#D5D9D2] p-3 space-y-2">
-                <img src={candidate.image} alt={candidate.title} className="w-full h-28 object-contain bg-white" />
-                <p className="text-xs line-clamp-3">{candidate.title}</p>
-                <button type="button" disabled={isSubmitting} className="w-full rounded-lg py-2 text-sm bg-[#247C72] text-white" onClick={async () => {
-                  setIsSubmitting(true); setValidationError(null);
-                  try {
-                    await startStreamingSearch({ productName: candidate.title, productUrl: candidate.url,
-                      mediaType, sourcePlatform: platform, similarReviews, sourceVideoCounts, targetVideoCount: videoTarget, targetPhotoCount: clampCount(targetPhotoInput),
-                      referenceImage: candidate.image, imageConfirmedLocally: true,
-                      verifiedExpansion: cloudProfileRef.current && preparedImageRef.current ? {referenceImage:preparedImageRef.current,query:commercialName.trim(),profile:cloudProfileRef.current} : undefined });
-                  } catch (error) { setValidationError(error instanceof Error ? error.message : 'تعذر بدء البحث.'); }
-                  finally { setIsSubmitting(false); }
-                }}>{allowSimilar?'اختَر هذا المنتج':'ده نفس المنتج'}</button>
-              </div>)}
-            </div>
-          </section>
-        )}
+          <input
+            id="product-name-input"
+            type="text"
+            value={productName}
+            onChange={(e) => {
+              setProductName(e.target.value);
+              if (validationError) setValidationError(null);
+            }}
+            placeholder="أدخل اسم المنتج بالعربية أو الإنجليزية أو ارفع صورته بالأعلى..."
+            className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
+          />
+          <p className="text-[11px] text-[#616764] mt-1.5">
+            إذا لم يعثر البحث على منتج بالاسم المختار في أمازون، يقوم النظام بتحديث الاسم وتجربة الأسماء التجارية البديلة تلقائياً حتى يعثر على المنتج.
+          </p>
+        </div>
+
         {/* 2b) Direct Product Page Link right under Product Name */}
-        <details className="radaar-options" id="product-link-options"><summary>عندي رابط المنتج على أمازون</summary>
+        <div>
           <div className="flex items-center justify-between gap-2 mb-2">
             <label
               htmlFor="product-url-input"
               className="flex items-center gap-1.5 text-sm font-semibold text-[#181B1A]"
             >
               <LinkIcon className="w-4 h-4 text-[#247C72]" />
-              <span>رابط مباشر لصفحة المنتج على أمازون (اختياري)</span>
+              <span>رابط مباشر لصفحة المنتج على أمازون أو فيديو تيك توك (اختياري)</span>
             </label>
 
             {(productUrl.trim() || productName.trim()) && (
@@ -446,7 +953,7 @@ export const HomeSearchCard: React.FC = () => {
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-xs font-semibold text-[#247C72] hover:text-[#1E665E] bg-[#EAF3F2] hover:bg-[#DCECE9] px-2.5 py-1 rounded-lg transition-colors"
               >
-                <span>فتح صفحة المنتج</span>
+                <span>{sourcePlatform === 'tiktok' ? 'فتح على تيك توك' : 'فتح صفحة المنتج'}</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
             )}
@@ -458,29 +965,67 @@ export const HomeSearchCard: React.FC = () => {
             dir="ltr"
             value={productUrl}
             onChange={(e) => {
-              setProductUrl(e.target.value);setAutoListing(null);commercialEditedRef.current=true;
-              identityRequestRef.current?.abort(); setIdentityCandidates([]);
+              setProductUrl(e.target.value);
               if (validationError) setValidationError(null);
             }}
-            placeholder="https://www.amazon.com/dp/..."
+            placeholder={
+              sourcePlatform === 'tiktok'
+                ? 'https://www.tiktok.com/@username/video/...'
+                : 'https://www.amazon.com/dp/... أو رابط تيك توك'
+            }
             className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm text-[#181B1A] placeholder-[#8A908D] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors text-left"
           />
           <p className="text-[11px] text-[#616764] mt-1.5">
-            عند تحديد رابط، نجمع مراجعات أمازون من صفحة المنتج المحددة فقط.
+            يمكنك وضع رابط صفحة المنتج من أمازون أو رابط فيديو تيك توك، أو الاكتفاء باسم المنتج أو صورته بالأعلى.
           </p>
-        </details>
+        </div>
+
+        {/* 2c) Source Platform Selector (أمازون / تيك توك / الاثنين معاً) */}
+        <div>
+          <label className="block text-sm font-semibold text-[#181B1A] mb-2">
+            منصة البحث (المصدر)
+          </label>
+          <div className="grid grid-cols-3 gap-2.5">
+            <button
+              type="button"
+              onClick={() => setSourcePlatform('amazon')}
+              className={`h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                sourcePlatform === 'amazon'
+                  ? 'bg-[#EAF3F2] border-[#247C72] text-[#247C72] font-semibold'
+                  : 'bg-[#FAFBF9] border-[#E2E5DF] text-[#616764] hover:text-[#181B1A] hover:bg-white'
+              }`}
+            >
+              <span>أمازون • Amazon</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSourcePlatform('tiktok');
+                if (mediaType === 'photo') setMediaType('video');
+              }}
+              className={`h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                sourcePlatform === 'tiktok'
+                  ? 'bg-[#181B1A] border-[#181B1A] text-white font-semibold'
+                  : 'bg-[#FAFBF9] border-[#E2E5DF] text-[#616764] hover:text-[#181B1A] hover:bg-white'
+              }`}
+            >
+              <span>تيك توك • TikTok</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSourcePlatform('all')}
+              className={`h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                sourcePlatform === 'all'
+                  ? 'bg-[#EAF3F2] border-[#247C72] text-[#247C72] font-semibold'
+                  : 'bg-[#FAFBF9] border-[#E2E5DF] text-[#616764] hover:text-[#181B1A] hover:bg-white'
+              }`}
+            >
+              <span>الاثنين معاً (أمازون + تيك توك)</span>
+            </button>
+          </div>
+        </div>
 
         {/* 3) Media Type Selector (فيديوهات / صور / الاثنين) */}
-        <h2 className="radaar-step"><b aria-hidden="true">٢</b> اختَر النتائج</h2>
-        <label className="block text-sm font-semibold">المصدر
-          <select value={platform} className="radaar-select block mt-2 w-full" onChange={e=>{
-            const next=e.target.value==='tiktok'?'tiktok':e.target.value==='all'?'all':'amazon';setPlatform(next);setIdentityCandidates([]);
-            if(next==='tiktok')setMediaType('video');
-          }}><option value="amazon">أمازون · ريفيوهات العملاء فقط</option><option value="tiktok">تيك توك · كل فيديوهات المنتج</option><option value="all">Amazon + TikTok</option></select>
-        </label>
-        {platform!=='tiktok' && mediaType!=='photo' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={similarReviews} onChange={e=>setSimilarReviews(e.target.checked)}/>لو ملقيناش فيديوهات عملاء للمنتج، اعرض ريفيوهات لتصميم بتشابه بصري تقديري ٩٠٪ أو أعلى</label>}
-        {platform!=='amazon' && <p className="text-xs text-[#616764]">{platform==='all'?'أمازون: مراجعات العملاء فقط. ':''}تيك توك: مراجعات وعروض وشرح استخدام لنفس المنتج.</p>}
-        {platform==='amazon' && <p className="text-xs text-[#616764]">العدد المطلوب هدف للبحث. لو المراجعات أقل، هنعرض المتاح من العملاء فقط.</p>}
         <div>
           <label className="block text-sm font-semibold text-[#181B1A] mb-2">
             نوع النتائج
@@ -500,7 +1045,7 @@ export const HomeSearchCard: React.FC = () => {
             </button>
             <button
               type="button"
-              disabled={platform==='tiktok'} onClick={() => setMediaType('photo')}
+              onClick={() => setMediaType('photo')}
               className={`h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
                 mediaType === 'photo'
                   ? 'bg-[#EAF3F2] border-[#247C72] text-[#247C72] font-semibold'
@@ -512,7 +1057,7 @@ export const HomeSearchCard: React.FC = () => {
             </button>
             <button
               type="button"
-              disabled={platform==='tiktok'} onClick={() => setMediaType('both')}
+              onClick={() => setMediaType('both')}
               className={`h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
                 mediaType === 'both'
                   ? 'bg-[#EAF3F2] border-[#247C72] text-[#247C72] font-semibold'
@@ -525,43 +1070,153 @@ export const HomeSearchCard: React.FC = () => {
           </div>
         </div>
 
+        {/* 4) Independent Video Counts per Platform (Amazon + TikTok) & Photo Counts */}
+        <div className="space-y-3">
+          {(mediaType === 'video' || mediaType === 'both') &&
+            (sourcePlatform === 'all' ? (
+              <div className="rounded-xl border border-[#E2E5DF] bg-[#FAFBF9] p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-sm font-semibold text-[#181B1A]">
+                    تحديد عدد الفيديوهات لكل منصة بشكل مستقل
+                  </span>
+                  <span className="text-xs font-bold text-[#247C72] bg-[#EAF3F2] border border-[#247C72]/30 px-2.5 py-1 rounded-lg">
+                    الإجمالي المطلوب: {clampCount(targetAmazonVideoInput) + clampCount(targetTikTokVideoInput)} فيديو
+                  </span>
+                </div>
 
-        {/* 4) Independent Video & Photo Counts (1..500, default 10) */}
-        <div
-          className={`grid gap-3 ${
-            mediaType === 'both' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'
-          }`}
-        >
-          {sourceVideoCounts && (['amazon','tiktok'] as const).map(source=>{
-            const amazon=source==='amazon';
-            const value=amazon?amazonInput:tiktokInput;
-            const update=amazon?setAmazonInput:setTiktokInput;
-            return <label key={source} className="block text-sm font-semibold">
-              {amazon?'عدد فيديوهات أمازون':'عدد فيديوهات تيك توك'}
-              <input type="number" min={1} max={500} value={value} onChange={e=>update(e.target.value)}
-                onBlur={()=>update(String(clampCount(value)))} className="mt-2 w-full h-11 px-4 rounded-xl border bg-[#FAFBF9]" />
-            </label>;
-          })}
-          {!sourceVideoCounts && (mediaType === 'video' || mediaType === 'both') && (
-            <div>
-              <label
-                htmlFor="target-video-count"
-                className="block text-sm font-semibold text-[#181B1A] mb-1.5"
-              >
-                عدد الفيديوهات
-              </label>
-              <input
-                id="target-video-count"
-                type="number"
-                min={1}
-                max={500}
-                value={targetVideoInput}
-                onChange={(e) => setTargetVideoInput(e.target.value)}
-                onBlur={() => setTargetVideoInput(String(clampCount(targetVideoInput)))}
-                className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm font-medium text-[#181B1A] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
-              />
-            </div>
-          )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Amazon Video Count */}
+                  <div className="bg-white rounded-xl border border-[#E2E5DF] p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label
+                        htmlFor="target-amazon-video-count"
+                        className="text-xs font-bold text-[#247C72] flex items-center gap-1.5"
+                      >
+                        <Video className="w-3.5 h-3.5" />
+                        <span>فيديوهات أمازون • Amazon</span>
+                      </label>
+                      <div className="flex items-center gap-1">
+                        {[5, 10, 20, 50].map((preset) => (
+                          <button
+                            key={`amz-${preset}`}
+                            type="button"
+                            onClick={() => setTargetAmazonVideoInput(String(preset))}
+                            className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${
+                              clampCount(targetAmazonVideoInput) === preset
+                                ? 'bg-[#247C72] text-white border-[#247C72]'
+                                : 'bg-[#FAFBF9] text-[#616764] border-[#E2E5DF] hover:text-[#181B1A]'
+                            }`}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <input
+                      id="target-amazon-video-count"
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={targetAmazonVideoInput}
+                      onChange={(e) => setTargetAmazonVideoInput(e.target.value)}
+                      onBlur={() =>
+                        setTargetAmazonVideoInput(String(clampCount(targetAmazonVideoInput)))
+                      }
+                      className="w-full h-10 px-3.5 rounded-lg bg-[#FAFBF9] border border-[#E2E5DF] text-sm font-semibold text-[#181B1A] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
+                    />
+                  </div>
+
+                  {/* TikTok Video Count */}
+                  <div className="bg-white rounded-xl border border-[#E2E5DF] p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label
+                        htmlFor="target-tiktok-video-count"
+                        className="text-xs font-bold text-[#181B1A] flex items-center gap-1.5"
+                      >
+                        <Video className="w-3.5 h-3.5" />
+                        <span>فيديوهات تيك توك • TikTok</span>
+                      </label>
+                      <div className="flex items-center gap-1">
+                        {[5, 10, 20, 50].map((preset) => (
+                          <button
+                            key={`tt-${preset}`}
+                            type="button"
+                            onClick={() => setTargetTikTokVideoInput(String(preset))}
+                            className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${
+                              clampCount(targetTikTokVideoInput) === preset
+                                ? 'bg-[#181B1A] text-white border-[#181B1A]'
+                                : 'bg-[#FAFBF9] text-[#616764] border-[#E2E5DF] hover:text-[#181B1A]'
+                            }`}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <input
+                      id="target-tiktok-video-count"
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={targetTikTokVideoInput}
+                      onChange={(e) => setTargetTikTokVideoInput(e.target.value)}
+                      onBlur={() =>
+                        setTargetTikTokVideoInput(String(clampCount(targetTikTokVideoInput)))
+                      }
+                      className="w-full h-10 px-3.5 rounded-lg bg-[#FAFBF9] border border-[#E2E5DF] text-sm font-semibold text-[#181B1A] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+                  <label
+                    htmlFor="target-video-count"
+                    className="block text-sm font-semibold text-[#181B1A]"
+                  >
+                    {sourcePlatform === 'tiktok'
+                      ? 'عدد فيديوهات تيك توك (TikTok)'
+                      : 'عدد فيديوهات أمازون (Amazon)'}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
+                      {[5, 10, 20, 50].map((preset) => (
+                        <button
+                          key={`single-${preset}`}
+                          type="button"
+                          onClick={() => setTargetVideoInput(String(preset))}
+                          className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border transition-colors cursor-pointer ${
+                            clampCount(targetVideoInput) === preset
+                              ? 'bg-[#247C72] text-white border-[#247C72]'
+                              : 'bg-[#FAFBF9] text-[#616764] border-[#E2E5DF] hover:text-[#181B1A]'
+                          }`}
+                        >
+                          {preset}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSourcePlatform('all')}
+                      className="text-xs font-semibold text-[#247C72] bg-[#EAF3F2] hover:bg-[#DCECE9] border border-[#247C72]/30 px-2.5 py-0.5 rounded-md transition-colors cursor-pointer"
+                    >
+                      تحديد فيديوهات لكلتا المنصتين معاً
+                    </button>
+                  </div>
+                </div>
+                <input
+                  id="target-video-count"
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={targetVideoInput}
+                  onChange={(e) => setTargetVideoInput(e.target.value)}
+                  onBlur={() => setTargetVideoInput(String(clampCount(targetVideoInput)))}
+                  className="w-full h-11 px-4 rounded-xl bg-[#FAFBF9] border border-[#E2E5DF] text-sm font-medium text-[#181B1A] focus:outline-none focus:bg-white focus:border-[#247C72] transition-colors"
+                />
+              </div>
+            ))}
 
           {(mediaType === 'photo' || mediaType === 'both') && (
             <div>
@@ -585,6 +1240,39 @@ export const HomeSearchCard: React.FC = () => {
           )}
         </div>
 
+        {/* 4b) Visual Verification Rules (Same Design vs Strict Color + Include Similar) */}
+        <div className="rounded-xl border border-[#E2E5DF] bg-[#FAFBF9] p-3.5 space-y-2.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-xs font-bold text-[#181B1A]">
+              قواعد مطابقة المنتج البصرية (تجاهل اختلاف اللون أو الشعار افتراضياً)
+            </span>
+            <span className="text-[11px] font-semibold text-[#247C72] bg-[#EAF3F2] px-2 py-0.5 rounded">
+              {matchMode === 'strict_color' ? 'وضع تطابق اللون الصارم' : 'وضع نفس التصميم (أي لون أو ماركة)'}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-4 pt-1">
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-[#181B1A] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={matchMode === 'strict_color'}
+                onChange={(e) => setMatchMode(e.target.checked ? 'strict_color' : 'same_design')}
+                className="w-4 h-4 accent-[#247C72] rounded cursor-pointer"
+              />
+              <span>اللون لازم يتطابق (رفض الألوان الأخرى لنفس المنتج)</span>
+            </label>
+
+            <label className="inline-flex items-center gap-2 text-xs font-medium text-[#181B1A] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeSimilar}
+                onChange={(e) => setIncludeSimilar(e.target.checked)}
+                className="w-4 h-4 accent-[#247C72] rounded cursor-pointer"
+              />
+              <span>عرض المنتجات الشبيهة (بنفس الفئة عند قلة النتائج)</span>
+            </label>
+          </div>
+        </div>
+
         {validationError && (
           <p className="text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
             {validationError}
@@ -594,10 +1282,10 @@ export const HomeSearchCard: React.FC = () => {
         {/* 5) Single Primary Button: ابدأ البحث */}
         <button
           type="submit"
-          disabled={isSubmitting || isScanning}
+          disabled={isSubmitting}
           className="w-full h-12 rounded-xl bg-[#247C72] hover:bg-[#1E665E] disabled:opacity-60 text-white font-semibold text-sm transition-colors flex items-center justify-center cursor-pointer"
         >
-          {isScanning ? 'جاري تحليل الصورة…' : isSubmitting ? 'جاري تحديد نفس المنتج…' : 'ابدأ البحث'}
+          {isSubmitting ? 'جاري بدء البحث...' : 'ابدأ البحث'}
         </button>
       </form>
     </div>

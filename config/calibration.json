@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "calibratedAt": "2026-11-06T19:23:38.929Z",
+  "clipModelId": "Xenova/clip-vit-base-patch32",
+  "stage1LocalMinShapeSimilarity": 0.58,
+  "stage1LocalDirectRejectSimilarity": 0.42,
+  "stage1MustNotBeOverrideClipSimilarity": 0.94,
+  "stage2MustNotBeRejectConfidence": 0.58,
+  "stage2AcceptMinConfidence": 0.6,
+  "strictColorMinHistogramSimilarity": 0.62,
+  "videoDedupeMaxHammingDistance": 8,
+  "maxGeminiCallsPerDay": 1500,
+  "maxStage2BatchSize": 4,
+  "snowballMinVerifiedListings": 1,
+  "maxConsecutiveZeroYieldPages": 2,
+  "notes": "Calibrated colour-agnostic grayscale CLIP embeddings (Xenova/clip-vit-base-patch32) on F1 mosquito killer, F4 colour variants, B082F6HKZV grid zapper, and 5-in-1 pliers fixtures.",
+  "calibrationMetrics": {
+    "positiveCount": 3,
+    "negativeCount": 4,
+    "precision": 1,
+    "recall": 1,
+    "f1Score": 1,
+    "positiveMeanClipSim": 0.932,
+    "negativeMeanClipSim": 0.443
+  }
+}

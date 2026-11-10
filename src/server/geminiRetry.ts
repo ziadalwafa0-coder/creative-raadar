@@ -115,9 +115,9 @@ export async function executeWithGeminiRetry<T>(
     onRetry?: (attempt: number, delayMs: number, error: unknown) => void;
   } = {}
 ): Promise<T> {
-  const maxRetries = options.maxRetries ?? 2;
-  const baseMs = options.baseMs ?? 400;
-  const maxMs = options.maxMs ?? 2500;
+  const maxRetries = options.maxRetries ?? 1;
+  const baseMs = options.baseMs ?? 250;
+  const maxMs = options.maxMs ?? 1200;
 
   let attempt = 0;
 

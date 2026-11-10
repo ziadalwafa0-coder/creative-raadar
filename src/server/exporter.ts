@@ -1,85 +1,125 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ZipArchive, type ZipEntryData } from 'archiver';
+import { ZipArchive } from 'archiver';
 import type { Response } from 'express';
 import type { Project, CandidateAsset } from '../types/index.ts';
 import { sanitizeCsvField } from '../utils/security.server.ts';
 import { getExportFolderName } from '../utils/rules.ts';
+import { pinCachedFile, resolveBestLocalMediaForAsset } from './downloader.ts';
+
+export function makeSafeAsciiZipFilename(
+  index: number,
+  platform: string,
+  idOrAsin: string,
+  ext: string
+): string {
+  const cleanPlatform = (platform || 'media').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 12) || 'media';
+  const cleanId = (idOrAsin || `item_${index + 1}`)
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 36) || `item_${index + 1}`;
+  const cleanExt = (ext || 'mp4').replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'mp4';
+  const prefix = String(index + 1).padStart(2, '0');
+  return `${prefix}_${cleanPlatform}_${cleanId}.${cleanExt}`;
+}
+
+export function makeSafeAsciiRootDirName(rawName: string, dateStr: string): string {
+  const asciiPart = (rawName || 'Creative_Radaar_Export')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 36);
+  return `${asciiPart || 'Creative_Radaar_Export'}_${dateStr}`;
+}
 
 /**
  * Builds and streams a ZIP export archive to the client.
- * Blocks empty ZIP archives with an informative message.
+ * Returns HTTP 409 with an Arabic JSON error if zero items/files/links are available.
  */
 export async function streamExportArchive(
   project: Project,
   assets: CandidateAsset[],
   res: Response
 ): Promise<void> {
-  // Requirement 5: Block empty ZIP as video/photo success
   if (!assets || assets.length === 0) {
-    res.status(400).json({
+    res.status(409).json({
       error: 'لا توجد عناصر محددة للتصدير. يرجى تحديد عنصر واحد على الأقل.',
       code: 'NO_ASSETS_SELECTED',
     });
     return;
   }
 
-  // Auto-download any assets that have a valid mediaUrl but haven't been saved to disk yet
-  const pendingToDownload = assets.filter(
-    (a) =>
-      (!a.localFilePath || !fs.existsSync(a.localFilePath)) &&
-      a.mediaUrl &&
-      !a.mediaUrl.includes('youtube.com') &&
-      !a.mediaUrl.includes('youtu.be')
-  );
-  if (pendingToDownload.length > 0) {
-    try {
-      const { downloadMedia } = await import('./downloader.ts');
-      const batchSize = 6;
-      for (let i = 0; i < pendingToDownload.length; i += batchSize) {
-        const batch = pendingToDownload.slice(i, i + batchSize);
-        await Promise.all(
-          batch.map(async (asset) => {
-            if (!asset.mediaUrl) return;
-            const resDl = await downloadMedia(asset.mediaUrl, asset.id, asset.mediaType);
-            if (resDl.status === 'verified_available' && resDl.localFilePath) {
-              asset.downloadStatus = 'verified_available';
-              asset.localFilePath = resDl.localFilePath;
-              asset.sha256 = resDl.sha256 || asset.sha256;
-              asset.fileSizeBytes = resDl.fileSizeBytes || asset.fileSizeBytes;
-            }
-          })
-        );
+  // Prepare all selected items before sending ZIP headers
+  const preparedItems = await Promise.all(
+    assets.map(async (asset, idx) => {
+      const resolved = await resolveBestLocalMediaForAsset(asset, AbortSignal.timeout(20_000));
+      if (resolved.status === 'ready' && resolved.localFilePath) {
+        asset.downloadStatus = 'verified_available';
+        asset.localFilePath = resolved.localFilePath;
+        asset.fileSizeBytes = resolved.fileSizeBytes || asset.fileSizeBytes;
       }
-    } catch {}
-  }
-
-  const downloadedAssets = assets.filter(
-    (a) => a.downloadStatus === 'verified_available' && a.localFilePath && fs.existsSync(a.localFilePath)
+      return { asset, idx, resolved };
+    })
   );
-  if (downloadedAssets.length === 0) {
-    res.status(400).json({
-      error: 'لا توجد ملفات تم تنزيلها بنجاح لتضمينها في الحزمة. يمكنك فتح الروابط المباشرة للمصادر أو إضافة روابط يدوياً.',
-      code: 'NO_DOWNLOADED_FILES',
+
+  const readyCount = preparedItems.filter((p) => p.resolved.status === 'ready').length;
+  const linkOnlyCount = preparedItems.filter((p) => p.resolved.status === 'link_only').length;
+
+  if (readyCount === 0 && linkOnlyCount === 0) {
+    res.status(409).json({
+      error: 'لا توجد ملفات أو روابط صالحة للتصدير في العناصر المحددة.',
+      code: 'NO_EXPORTABLE_ITEMS',
     });
     return;
   }
 
-  const sanitizeName = (name: string) => name.replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '_').slice(0, 40);
   const dateStr = new Date().toISOString().split('T')[0];
-  const rootDirName = `${sanitizeName(project.productProfile?.suggestedNameEn || project.name || 'Creative_Radaar_Export')}_${dateStr}`;
+  const rootDirName = makeSafeAsciiRootDirName(
+    project.productProfile?.suggestedNameEn || project.name || 'Creative_Radaar_Export',
+    dateStr
+  );
 
   res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Cache-Control', 'no-store');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="${encodeURIComponent(rootDirName)}.zip"`
+    `attachment; filename="${rootDirName}.zip"`
   );
+
+  const unpins: Array<() => void> = [];
+  const cleanupAllPins = () => {
+    while (unpins.length > 0) {
+      const u = unpins.pop();
+      try {
+        u?.();
+      } catch {}
+    }
+  };
+
+  res.on('close', cleanupAllPins);
 
   const archive = new ZipArchive({
     store: true,
+    zlib: { level: 0 },
+  });
+
+  const streamDonePromise = new Promise<void>((resolve, reject) => {
+    res.on('close', () => resolve());
+    res.on('finish', () => resolve());
+    archive.on('error', (err) => reject(err));
+  });
+
+  archive.on('warning', (err: any) => {
+    if (err.code === 'ENOENT') {
+      console.warn('[Export Archive] Non-fatal ENOENT warning:', err.message);
+    } else {
+      console.warn('[Export Archive] Warning:', err);
+    }
   });
 
   archive.on('error', (err) => {
+    cleanupAllPins();
     console.error('[Export Archive Error]', err);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Archive generation failed' });
@@ -88,131 +128,118 @@ export async function streamExportArchive(
 
   archive.pipe(res);
 
-  // 1. Generate Sources.csv with formula injection protection
-  const csvHeaders = [
-    'Asset ID',
-    'Filename',
-    'Media Type',
-    'Platform',
-    'Reviewer / Channel',
-    'Product URL',
-    'Review URL',
-    'Platform Source ID',
-    'Provenance Classification',
-    'Verified Purchase Evidence',
-    'Incentive Disclosure',
-    'Match Category',
-    'Visible Differences',
-    'Content Description',
-    'Sentiment',
-    'Duration (sec)',
-    'Dimensions',
-    'Audio Available',
-    'Download Status',
-    'Verification Status',
-    'Collection Timestamp',
-    'Rights Status',
+  const manifestHeaders = [
+    'title',
+    'source',
+    'url',
+    'embed_url',
+    'status',
+    'reason',
+    'tier',
+    'filename',
+  ];
+  const manifestRows: string[] = [manifestHeaders.map(sanitizeCsvField).join(',')];
+  const linksLines: string[] = [
+    `# Creative Radaar Export Links — ${project.name} (${new Date().toISOString()})`,
+    `# Total Selected: ${assets.length} | Ready Files: ${readyCount} | Link-Only: ${linkOnlyCount}`,
+    '',
   ];
 
-  const csvRows: string[] = [csvHeaders.map(sanitizeCsvField).join(',')];
+  const usedFilenames = new Set<string>();
 
-  for (const asset of assets) {
-    const ext = asset.localFilePath
-      ? path.extname(asset.localFilePath).slice(1) || (asset.mediaType === 'video' ? 'mp4' : 'jpg')
-      : asset.mediaType === 'video'
-      ? 'mp4'
-      : 'jpg';
-    const isDownloaded = asset.downloadStatus === 'verified_available' && asset.localFilePath && fs.existsSync(asset.localFilePath);
-    const filename = isDownloaded ? `${asset.id}_${asset.matchCategory}.${ext}` : '';
+  for (const { asset, idx, resolved } of preparedItems) {
+    let zipRelativePath = '';
+    if (resolved.status === 'ready' && resolved.localFilePath && fs.existsSync(resolved.localFilePath)) {
+      const unpin = pinCachedFile(resolved.localFilePath);
+      unpins.push(unpin);
 
-    const row = [
-      asset.id,
-      filename,
-      asset.mediaType,
-      asset.platform,
-      asset.reviewerOrChannel || '',
-      asset.productListingUrl || '',
-      asset.sourceUrl,
-      asset.platformAssetId || asset.reviewId || '',
-      asset.provenance,
-      asset.verifiedPurchaseEvidence || '',
-      asset.incentiveDisclosure || '',
-      asset.matchCategory,
-      (asset.visibleDifferences || []).join('; '),
-      asset.contentDescription,
-      asset.sentiment || 'neutral',
-      asset.durationSeconds ? String(asset.durationSeconds) : '',
-      asset.dimensions ? `${asset.dimensions.width}x${asset.dimensions.height}` : '',
-      asset.hasAudio ? 'Yes' : 'No',
-      asset.downloadStatus,
-      isDownloaded ? 'Verified' : 'Source_Only',
-      asset.collectedAt,
-      asset.rightsStatus || 'unknown',
-    ];
-
-    csvRows.push(row.map(sanitizeCsvField).join(','));
-  }
-
-  const csvContent = '\uFEFF' + csvRows.join('\r\n'); // UTF-8 BOM for Excel compatibility
-  archive.append(csvContent, { name: `${rootDirName}/Sources.csv` });
-
-  // 2. Generate Sources.json
-  const jsonContent = JSON.stringify(
-    {
-      project: {
-        id: project.id,
-        name: project.name,
-        mediaTypeRequested: project.mediaTypeRequested,
-        targetVideoCount: project.targetVideoCount,
-        targetPhotoCount: project.targetPhotoCount,
-        exportedAt: new Date().toISOString(),
-        productProfile: project.productProfile,
-      },
-      assetsCount: assets.length,
-      downloadedCount: downloadedAssets.length,
-      assets,
-    },
-    null,
-    2
-  );
-  archive.append(jsonContent, { name: `${rootDirName}/Sources.json` });
-
-  // 3. Generate README.txt
-  const readmeContent = `Creative Radaar Product Media Export Package
-=====================================================
-المشروع: ${project.name}
-فئة المنتج: ${project.productProfile?.category || 'General'}
-اسم المنتج المقترح: ${project.productProfile?.suggestedNameAr || project.name}
-تاريخ التصدير: ${new Date().toISOString()}
-إجمالي الأصول: ${assets.length} (المحملة فعلياً: ${downloadedAssets.length})
-=====================================================
-
-محتويات الحزمة وتوزيع المجلدات:
-- /Customer_Reviews/       : مراجعات وفيديوهات المشترين الحقيقيين وشارات الشراء المؤكد.
-- /Creator_Reviews/        : استعراضات صناع المحتوى وتجارب التفكيك والمقارنة.
-- /Seller_Demos/           : فيديوهات الكتالوج الرسمي للبائع والمصنع.
-- /Photos/                 : الصور المرفوعة أو المستخرجة للمنتج.
-- Sources.csv              : سجل التدقيق والتحقق الشامل (محمي ضد Formula Injection).
-- Sources.json             : ملف البيانات التقنية المنسق بصيغة JSON.
-
-ملاحظة حقوق النشر والاستخدام التجاري:
-Creative Radaar توثق مصدر ومطابقة ميديا المنتج. تنزيل هذه الملفات كأرشيف
-لا يمنح ترخيصاً حصرياً أو حقوق ملكية فكرية تجارية لاستخدامها في الحملات الإعلانية المدفوعة
-دون إذن صريح من أصحاب المحتوى والمنصات الأصلية.
-`;
-  archive.append(readmeContent.trim(), { name: `${rootDirName}/README.txt` });
-
-  // 4. Append only real verified downloaded files into respective subfolders
-  for (const asset of downloadedAssets) {
-    if (asset.localFilePath && fs.existsSync(asset.localFilePath)) {
       const folder = getExportFolderName(asset);
-      const ext = path.extname(asset.localFilePath).slice(1) || (asset.mediaType === 'video' ? 'mp4' : 'jpg');
-      const fileName = `${asset.id}_${asset.matchCategory}.${ext}`;
-      const filePathInZip = `${rootDirName}/${folder}/${fileName}`;
-      const zipEntry: ZipEntryData = { name: filePathInZip, store: true };
-      archive.file(asset.localFilePath, zipEntry);
+      const ext =
+        path.extname(resolved.localFilePath).slice(1) ||
+        (asset.mediaType === 'video' ? 'mp4' : 'jpg');
+      let safeFile = makeSafeAsciiZipFilename(
+        idx,
+        asset.platform || 'amazon',
+        asset.asin || asset.platformAssetId || asset.id,
+        ext
+      );
+      while (usedFilenames.has(`${folder}/${safeFile}`)) {
+        safeFile = `${idx + 1}_${Date.now().toString(36)}_${safeFile}`;
+      }
+      usedFilenames.add(`${folder}/${safeFile}`);
+      zipRelativePath = `${rootDirName}/${folder}/${safeFile}`;
+
+      archive.append(fs.createReadStream(resolved.localFilePath), { name: zipRelativePath });
     }
+
+    const canonicalUrl = asset.sourceUrl || asset.productListingUrl || asset.mediaUrl || '';
+    const embedUrl =
+      asset.platform === 'tiktok' && canonicalUrl.includes('/video/')
+        ? `https://www.tiktok.com/embed/v2/${canonicalUrl.split('/video/')[1]?.split(/[?#]/)[0] || ''}`
+        : canonicalUrl;
+    const itemStatus =
+      resolved.status === 'ready'
+        ? 'ready'
+        : resolved.status === 'link_only'
+        ? 'link_only'
+        : `failed:${resolved.reason || 'unavailable'}`;
+    const itemTier = asset.verdictTier || asset.matchCategory || 'exact';
+
+    manifestRows.push(
+      [
+        asset.title || '',
+        asset.platform || 'amazon',
+        canonicalUrl,
+        embedUrl,
+        itemStatus,
+        resolved.reason || '',
+        itemTier,
+        zipRelativePath,
+      ]
+        .map(sanitizeCsvField)
+        .join(',')
+    );
+
+    linksLines.push(
+      `[${idx + 1}] (${asset.platform} | ${itemStatus} | tier=${itemTier}) ${asset.title || asset.id}`
+    );
+    linksLines.push(`    URL: ${canonicalUrl}`);
+    if (embedUrl && embedUrl !== canonicalUrl) {
+      linksLines.push(`    Embed: ${embedUrl}`);
+    }
+    if (zipRelativePath) {
+      linksLines.push(`    File: ${zipRelativePath}`);
+    }
+    linksLines.push('');
   }
 
-  await archive.finalize();
+  const manifestCsv = '\uFEFF' + manifestRows.join('\r\n');
+  archive.append(manifestCsv, { name: `${rootDirName}/manifest.csv` });
+  archive.append(manifestCsv, { name: `${rootDirName}/Sources.csv` });
+  archive.append(linksLines.join('\r\n'), { name: `${rootDirName}/links.txt` });
+  archive.append(
+    JSON.stringify(
+      {
+        project: {
+          id: project.id,
+          name: project.name,
+          exportedAt: new Date().toISOString(),
+        },
+        assetsCount: assets.length,
+        readyFilesCount: readyCount,
+        linkOnlyCount,
+        assets,
+      },
+      null,
+      2
+    ),
+    { name: `${rootDirName}/Sources.json` }
+  );
+
+  try {
+    await archive.finalize();
+    await streamDonePromise;
+  } finally {
+    cleanupAllPins();
+  }
 }

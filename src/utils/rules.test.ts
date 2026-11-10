@@ -6,9 +6,16 @@ import {
   getExportFolderName,
   isDuplicateCandidate,
   normalizeUrl,
-  matchesStrictness
+  matchesStrictness,
+  computeWinnerSignal,
+  sortCandidatesByMode,
+  getSwipeVerdictLabel,
+  buildFallbackCreativeAnalysis,
 } from './rules.ts';
-import { evaluateStrictProductTitleMatch } from '../server/queryBuilder.ts';
+import {
+  buildProgressiveFallbackQueries,
+  evaluateStrictProductTitleMatch,
+} from '../server/queryBuilder.ts';
 import {
   extractRatingCountFromCardHtml,
   sortCandidatesByRatingCountDesc,
@@ -19,6 +26,12 @@ import {
 } from '../server/amazonVideos.ts';
 import { detectAmazonBlock } from '../server/amazonHttp.ts';
 import { AmazonConnector } from '../server/connectors/AmazonConnector.ts';
+import { isAllowedDownloadHost } from '../server/streamSearch.ts';
+import {
+  buildTikTokSearchVariants,
+  evaluateTikTokVideoMatch,
+  isTikTokUrl,
+} from '../server/tiktokVideos.ts';
 import { CandidateAsset } from '../types/index.ts';
 
 test('SSRF URL validation allows public domains and blocks private/loopback destinations', () => {
@@ -182,8 +195,8 @@ test('Phase 2 Amazon modules: rating count sorting, customer video extraction wi
 
   // 2. Customer reviews keep both positive and negative reviews and reject seller/other-ASIN videos
   const html = `<div data-video-items="[
-    {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/uuid-pos-1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B07QSFJ8S2&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Great emergency flashlight!&quot;,&quot;publicName&quot;:&quot;Happy Buyer&quot;,&quot;fullReviewLink&quot;:&quot;/gp/customer-reviews/RFIXTURE184&quot;},
-    {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/uuid-neg-2/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B07QSFJ8S2&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Battery died after two days&quot;,&quot;publicName&quot;:&quot;Critical Buyer&quot;,&quot;fullReviewLink&quot;:&quot;/gp/customer-reviews/RFIXTURE185&quot;},
+    {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/uuid-pos-1/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B07QSFJ8S2&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Great emergency flashlight!&quot;,&quot;publicName&quot;:&quot;Happy Buyer&quot;},
+    {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/uuid-neg-2/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Customer&quot;,&quot;productAsin&quot;:&quot;B07QSFJ8S2&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Battery died after two days&quot;,&quot;publicName&quot;:&quot;Critical Buyer&quot;},
     {&quot;videoURL&quot;:&quot;https://m.media-amazon.com/images/S/vse-vms-transcoding-artifact-us-east-1-prod/uuid-seller-3/default.jobtemplate.hls.m3u8&quot;,&quot;creatorType&quot;:&quot;Seller&quot;,&quot;productAsin&quot;:&quot;B07QSFJ8S2&quot;,&quot;segmentName&quot;:&quot;Videos for this product&quot;,&quot;title&quot;:&quot;Official Promo&quot;}
   ]"></div>`;
   const videos = parseAmazonUsVideosFromHtml(html, 'https://www.amazon.com/dp/B07QSFJ8S2');
@@ -235,4 +248,177 @@ test('Phase 4 AmazonConnector does not return fake Unsplash thumbnails, fake dur
   assert.equal(inspected.provenance, 'unverified_customer_review');
 });
 
+test('TikTok video search variants, strict product matching, and download host validation', () => {
+  const variants = buildTikTokSearchVariants(
+    'Heavy Duty Dual Cylinder 12V Portable Air Compressor Tire Inflator',
+    ['Dual Cylinder Air Compressor Tire Inflator'],
+    'Air Compressor Tire Inflator'
+  );
+  assert.equal(variants.length > 0, true);
+  assert.equal(
+    variants.some((v) => /Compressor|Inflator/i.test(v)),
+    true,
+    'TikTok variants must preserve head product nouns'
+  );
 
+  assert.equal(isTikTokUrl('https://www.tiktok.com/@user/video/7685215539291032846'), true);
+  assert.equal(
+    isAllowedDownloadHost('https://www.tiktok.com/@user/video/7685215539291032846'),
+    true
+  );
+  assert.equal(
+    isAllowedDownloadHost('https://v16-webapp-prime.tiktok.com/video/tos/alisg/sample.mp4'),
+    true
+  );
+
+  // Approves matching TikTok product video
+  const matchingVerdict = evaluateTikTokVideoMatch(
+    {
+      videoId: '7685215539291032846',
+      canonicalUrl: 'https://www.tiktok.com/@auto.supply.usa/video/7685215539291032846',
+      title: '150PSI Cordless Tire Inflator Portable Air Compressor #tireinflator #caraccessories',
+      playAddr: 'https://v16-webapp-prime.tiktok.com/video/tos/alisg/sample.mp4',
+      authorHandle: '@auto.supply.usa',
+      playCount: 1500,
+      diggCount: 45,
+      commentCount: 3,
+      cookieHeader: 'tt_chain_token=abc',
+    },
+    'Heavy Duty Dual Cylinder 12V Portable Air Compressor Tire Inflator',
+    'Air Compressor Tire Inflator',
+    ['Dual Cylinder'],
+    ['nail drill', 'screwdriver']
+  );
+  assert.equal(matchingVerdict.approved, true);
+
+  // Rejects excluded or industrial welding videos
+  const weldingVerdict = evaluateTikTokVideoMatch(
+    {
+      videoId: '7550707385438915870',
+      canonicalUrl: 'https://www.tiktok.com/@weldingmart.com/video/7550707385438915870',
+      title: 'Miller Big Blue 800 Duo Air Pak Heavy Duty Diesel Welder',
+      playAddr: 'https://v16-webapp-prime.tiktok.com/video/tos/alisg/sample2.mp4',
+      authorHandle: '@weldingmart.com',
+      playCount: 5000,
+      diggCount: 200,
+      commentCount: 10,
+      cookieHeader: 'tt_chain_token=def',
+    },
+    'Heavy Duty Dual Cylinder 12V Portable Air Compressor Tire Inflator',
+    'Air Compressor Tire Inflator'
+  );
+  assert.equal(weldingVerdict.approved, false);
+});
+
+test('Winner signal scoring, candidate sorting, swipe verdict labels, and creative hook brief generation', () => {
+  const highEngagementSignal = computeWinnerSignal({
+    platform: 'amazon',
+    ratingCount: 6400,
+    durationSeconds: 28,
+    matchScore: 96,
+    provenance: 'verified_purchase_review',
+  });
+  assert.equal(highEngagementSignal.tier, 'top_winner');
+  assert.equal(highEngagementSignal.score >= 82, true);
+
+  const lowEngagementSignal = computeWinnerSignal({
+    platform: 'tiktok',
+    ratingCount: 5,
+    durationSeconds: 140,
+    matchScore: 68,
+    provenance: 'unknown',
+  });
+  assert.equal(lowEngagementSignal.tier, 'standard');
+  assert.equal(lowEngagementSignal.score < highEngagementSignal.score, true);
+
+  const c1 = {
+    id: 'c1',
+    ratingCount: 50,
+    matchScore: 95,
+    durationSeconds: 25,
+    platform: 'amazon',
+  } as unknown as CandidateAsset;
+  const c2 = {
+    id: 'c2',
+    ratingCount: 9500,
+    matchScore: 92,
+    durationSeconds: 30,
+    platform: 'amazon',
+    provenance: 'verified_purchase_review',
+  } as unknown as CandidateAsset;
+
+  const sortedByWinner = sortCandidatesByMode([c1, c2], 'winner_signal');
+  assert.equal(sortedByWinner[0].id, 'c2');
+
+  const sortedByMatch = sortCandidatesByMode([c1, c2], 'match_score');
+  assert.equal(sortedByMatch[0].id, 'c1');
+
+  assert.equal(getSwipeVerdictLabel('winner').labelEn, 'Winner');
+  assert.equal(getSwipeVerdictLabel('testing').labelEn, 'Testing');
+
+  const fallbackBrief = buildFallbackCreativeAnalysis(
+    '12V Dual Cylinder Tire Inflator',
+    'Inflated my truck tire in 2 minutes',
+    'amazon'
+  );
+  assert.equal(fallbackBrief.hooksAr.length >= 3, true);
+  assert.equal(fallbackBrief.hooksEn.length >= 3, true);
+  assert.equal(fallbackBrief.scriptBriefAr.includes('[00:00 - 00:03]'), true);
+});
+
+test('Progressive Amazon product name refinement updates overly specific names into matching commercial queries', () => {
+  const initialChosenName =
+    'UltraMax Model X900 Pro Deluxe 300PSI 12V Dual Cylinder Heavy Duty Car Air Compressor';
+  const fallbacks = buildProgressiveFallbackQueries(
+    initialChosenName,
+    [initialChosenName],
+    ['Dual Cylinder', 'Heavy Duty']
+  );
+
+  assert.equal(fallbacks.length >= 3, true, 'Should generate multiple progressive fallback product names');
+  assert.equal(
+    fallbacks.every((q) => q.toLowerCase() !== initialChosenName.toLowerCase()),
+    true,
+    'Must not repeat the failed initial name'
+  );
+  assert.equal(
+    fallbacks.some((q) => /Air Compressor|Tire Inflator/i.test(q)),
+    true,
+    'Must include high-recall commercial head nouns for Amazon US'
+  );
+
+  // Verify that an Amazon listing that failed against an overly narrow model-specific query
+  // is approved once the name is updated to a progressive fallback query
+  const sampleAmazonListingTitle =
+    'GSPSCN Silver Tire Inflator Heavy Duty Double Cylinders 12V Portable Air Compressor Pump';
+  const matchingFallback = fallbacks.find(
+    (q) => evaluateStrictProductTitleMatch(sampleAmazonListingTitle, q, q).approved
+  );
+  assert.equal(
+    Boolean(matchingFallback),
+    true,
+    'At least one progressive fallback product name must match the real Amazon listing title'
+  );
+
+  // Verify that unrelated pliers/hand tools sharing only modifier words ("Heavy Duty", "Grip", "Handle")
+  // are strictly rejected and never approved
+  assert.equal(
+    evaluateStrictProductTitleMatch(
+      'IRWIN VISE-GRIP GrooveLock Pliers Set, V-Jaw, 2-Piece, Heavy Duty Grip',
+      'Heavy Duty Dual Cylinder 12V Portable Air Compressor Tire Inflator',
+      'Dual Cylinder Air Compressor'
+    ).approved,
+    false,
+    'Must reject VISE-GRIP pliers sharing only modifier words'
+  );
+
+  assert.equal(
+    evaluateStrictProductTitleMatch(
+      'EZRED 4S04LHK Kiwi Pliers Set with Heavy Duty Handle Grip',
+      'Heavy Duty Dual Cylinder 12V Portable Air Compressor Tire Inflator',
+      'Dual Cylinder Air Compressor'
+    ).approved,
+    false,
+    'Must reject EZRED pliers sharing only modifier words'
+  );
+});

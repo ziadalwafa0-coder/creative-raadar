@@ -281,15 +281,88 @@ export class StorageService {
 
   public getLibrary(ownerId?: string): CandidateAsset[] {
     if (!ownerId) return [];
-    const allAssets: CandidateAsset[] = [];
+    const byId = new Map<string, CandidateAsset>();
+
+    // 1. Saved Swipe File items belonging to this owner
+    for (const [key, item] of Object.entries(this.db.library || {})) {
+      if (key.startsWith(`${ownerId}::`) || (!key.includes('::') && ownerId === PRIMARY_USER_OWNER_ID)) {
+        byId.set(item.id, item);
+      }
+    }
+
+    // 2. Also include verified project assets if not already in Swipe File
     for (const proj of this.getProjects(ownerId)) {
       for (const asset of proj.candidates) {
-        if (asset.downloadStatus === 'verified_available') {
-          allAssets.push(asset);
+        if (asset.downloadStatus === 'verified_available' && !byId.has(asset.id)) {
+          byId.set(asset.id, asset);
         }
       }
     }
-    return allAssets;
+
+    return Array.from(byId.values()).sort((a, b) => {
+      const tA = new Date(a.savedAt || a.collectedAt || 0).getTime();
+      const tB = new Date(b.savedAt || b.collectedAt || 0).getTime();
+      return tB - tA;
+    });
+  }
+
+  public upsertSwipeItem(ownerId: string, asset: CandidateAsset): CandidateAsset {
+    if (!this.db.library) this.db.library = {};
+    const key = `${ownerId}::${asset.id}`;
+    const existing = this.db.library[key];
+    const saved: CandidateAsset = {
+      ...(existing || {}),
+      ...asset,
+      swipeVerdict: asset.swipeVerdict || existing?.swipeVerdict || 'winner',
+      editorNotes: asset.editorNotes ?? existing?.editorNotes ?? '',
+      creativeAnalysis: asset.creativeAnalysis || existing?.creativeAnalysis,
+      savedAt: existing?.savedAt || new Date().toISOString(),
+    };
+    this.db.library[key] = saved;
+    this.save();
+    return saved;
+  }
+
+  public updateSwipeItem(
+    ownerId: string,
+    assetId: string,
+    patch: Partial<Pick<CandidateAsset, 'swipeVerdict' | 'editorNotes' | 'creativeAnalysis'>>
+  ): CandidateAsset | null {
+    if (!this.db.library) this.db.library = {};
+    const key = `${ownerId}::${assetId}`;
+    let target = this.db.library[key];
+    if (!target) {
+      // Check if it exists in user's projects
+      for (const proj of this.getProjects(ownerId)) {
+        const found = proj.candidates.find((c) => c.id === assetId);
+        if (found) {
+          target = { ...found, savedAt: new Date().toISOString() };
+          break;
+        }
+      }
+    }
+    if (!target) return null;
+
+    const updated: CandidateAsset = {
+      ...target,
+      ...(patch.swipeVerdict !== undefined ? { swipeVerdict: patch.swipeVerdict } : {}),
+      ...(patch.editorNotes !== undefined ? { editorNotes: patch.editorNotes } : {}),
+      ...(patch.creativeAnalysis !== undefined ? { creativeAnalysis: patch.creativeAnalysis } : {}),
+    };
+    this.db.library[key] = updated;
+    this.save();
+    return updated;
+  }
+
+  public removeSwipeItem(ownerId: string, assetId: string): boolean {
+    if (!this.db.library) return false;
+    const key = `${ownerId}::${assetId}`;
+    if (this.db.library[key]) {
+      delete this.db.library[key];
+      this.save();
+      return true;
+    }
+    return false;
   }
 
   public getUsage(ownerId?: string): WorkspaceUsage {

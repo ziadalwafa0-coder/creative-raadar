@@ -6,7 +6,6 @@ import { ManualLinkModal } from './components/ManualLinkModal.tsx';
 import { HomeSearchCard } from './components/HomeSearchCard.tsx';
 import { JobProgress } from './components/JobProgress.tsx';
 import { ResultsGallery } from './components/ResultsGallery.tsx';
-import { ProjectsView } from './components/ProjectsView.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { CheckCircle2, Info, Upload, Loader2 } from 'lucide-react';
 
@@ -14,7 +13,6 @@ const MainContent: React.FC = () => {
   const {
     isAuthenticated,
     isAuthChecking,
-    activeTab,
     currentProject,
     toast,
     setDroppedFile,
@@ -113,8 +111,8 @@ const MainContent: React.FC = () => {
   }
 
   return (
-    <div className="radaar-shell min-h-screen bg-[#F6F7F4] text-[#181B1A] flex flex-col font-sans relative" dir="rtl">
-      {isWindowDragging && !currentProject && activeTab === 'search' && (
+    <div className="min-h-screen bg-[#F6F7F4] text-[#181B1A] flex flex-col font-sans relative" dir="rtl">
+      {isWindowDragging && !currentProject && (
         <div className="fixed inset-0 z-50 bg-[#181B1A]/60 backdrop-blur-xs flex flex-col items-center justify-center p-6 pointer-events-none">
           <div className="border-2 border-dashed border-[#247C72] bg-white rounded-2xl p-8 max-w-md w-full text-center shadow-xl flex flex-col items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-[#EAF3F2] text-[#247C72] flex items-center justify-center">
@@ -127,27 +125,29 @@ const MainContent: React.FC = () => {
         </div>
       )}
 
+      {typeof import.meta !== 'undefined' && import.meta.env?.VITE_DEMO_MODE === 'true' && (
+        <div className="bg-amber-500 text-white font-bold text-xs py-1.5 px-4 text-center tracking-wide shadow-sm" role="alert">
+          بيانات تجريبية (وضع العرض التوضيحي مفعل)
+        </div>
+      )}
+
       <Navbar />
 
       <main className="flex-1 max-w-[760px] w-full mx-auto px-4 py-6 sm:py-8">
-        {activeTab === 'search' ? (
-          !currentProject ? (
-            <HomeSearchCard />
-          ) : (
-            <div className="space-y-4">
-              <JobProgress
-                key={`progress-${currentProject.id}`}
-                project={currentProject}
-                onOpenManualModal={() => setIsManualModalOpen(true)}
-              />
-              <ResultsGallery
-                key={`gallery-${currentProject.id}`}
-                project={currentProject}
-              />
-            </div>
-          )
+        {!currentProject ? (
+          <HomeSearchCard />
         ) : (
-          <ProjectsView />
+          <div className="space-y-4">
+            <JobProgress
+              key={`progress-${currentProject.id}`}
+              project={currentProject}
+              onOpenManualModal={() => setIsManualModalOpen(true)}
+            />
+            <ResultsGallery
+              key={`gallery-${currentProject.id}`}
+              project={currentProject}
+            />
+          </div>
         )}
       </main>
 

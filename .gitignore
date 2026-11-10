@@ -7,11 +7,10 @@ coverage/
 .env*
 !.env.example
 .data/
-.qa-five-products/
 .playwright-cli/
-
 .aistudio/
-.vercel/
-.venv*/
-__pycache__/
-*.pyc
+.local-data/
+.test-data/
+test-output.txt
+tests-*.txt
+type-errors.txt

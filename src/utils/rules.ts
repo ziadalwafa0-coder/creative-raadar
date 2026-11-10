@@ -3,7 +3,10 @@ import type {
   ProvenanceClassification,
   CandidateAsset,
   JobState,
-  MediaType
+  MediaType,
+  WinnerSignal,
+  SwipeVerdict,
+  CreativeHookAnalysis,
 } from '../types/index.ts';
 
 /**
@@ -235,3 +238,166 @@ export function matchesMediaType(assetType: 'video' | 'photo', requested: MediaT
   if (requested === 'both') return true;
   return assetType === requested;
 }
+
+/**
+ * Computes a deterministic Winner Signal (inspired by meta-ads-competitor-tracker & swipefile)
+ * based on platform engagement volume (Amazon rating count or TikTok likes/plays), UGC ad length
+ * sweet spot (12s-60s), and product match confidence.
+ */
+export function computeWinnerSignal(input: {
+  platform?: string;
+  ratingCount?: number;
+  matchScore?: number;
+  durationSeconds?: number;
+  provenance?: string;
+}): WinnerSignal {
+  const isTikTok = input.platform === 'tiktok';
+  const count = Math.max(0, Number(input.ratingCount) || 0);
+  const match = Math.min(100, Math.max(50, Number(input.matchScore) || 85));
+  const dur = Number(input.durationSeconds) || 0;
+
+  let engagementPoints = 25;
+  if (isTikTok) {
+    if (count >= 5000) engagementPoints = 55;
+    else if (count >= 1000) engagementPoints = 46;
+    else if (count >= 200) engagementPoints = 38;
+    else if (count > 0) engagementPoints = 30;
+  } else {
+    if (count >= 2500) engagementPoints = 55;
+    else if (count >= 800) engagementPoints = 47;
+    else if (count >= 150) engagementPoints = 39;
+    else if (count > 0) engagementPoints = 31;
+  }
+
+  const durationBonus = dur >= 12 && dur <= 65 ? 10 : dur > 0 ? 5 : 4;
+  const provenanceBonus = input.provenance === 'verified_purchase_review' ? 3 : 0;
+  const matchPoints = Math.round((match / 100) * 35);
+  const totalScore = Math.min(
+    99,
+    Math.max(50, engagementPoints + durationBonus + provenanceBonus + matchPoints)
+  );
+
+  if (totalScore >= 85) {
+    return {
+      tier: 'top_winner',
+      labelAr: 'فيديو رابح • تفاعل مرتفع',
+      score: totalScore,
+    };
+  }
+  if (totalScore >= 73) {
+    return {
+      tier: 'strong',
+      labelAr: 'أداء قوي • مناسب للإعلان',
+      score: totalScore,
+    };
+  }
+  return {
+    tier: 'standard',
+    labelAr: 'مراجعة مرجعية',
+    score: totalScore,
+  };
+}
+
+/**
+ * Sorts candidate assets by the selected ranking mode.
+ */
+export function sortCandidatesByMode(
+  candidates: CandidateAsset[],
+  mode: 'winner_signal' | 'match_score' | 'default'
+): CandidateAsset[] {
+  if (mode === 'default') return [...candidates];
+  const copy = [...candidates];
+  if (mode === 'winner_signal') {
+    return copy.sort((a, b) => {
+      const scoreA = a.winnerSignal?.score ?? computeWinnerSignal(a).score;
+      const scoreB = b.winnerSignal?.score ?? computeWinnerSignal(b).score;
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      return (b.ratingCount || 0) - (a.ratingCount || 0);
+    });
+  }
+  return copy.sort((a, b) => {
+    if ((b.matchScore || 0) !== (a.matchScore || 0)) {
+      return (b.matchScore || 0) - (a.matchScore || 0);
+    }
+    return (b.ratingCount || 0) - (a.ratingCount || 0);
+  });
+}
+
+/**
+ * Maps a Swipe File verdict to Arabic label.
+ */
+export function getSwipeVerdictLabel(verdict?: SwipeVerdict): {
+  labelAr: string;
+  labelEn: string;
+  badgeClass: string;
+} {
+  switch (verdict) {
+    case 'winner':
+      return {
+        labelAr: 'فائز',
+        labelEn: 'Winner',
+        badgeClass: 'bg-emerald-950/90 text-emerald-200 border-emerald-500/40',
+      };
+    case 'testing':
+      return {
+        labelAr: 'للاختبار',
+        labelEn: 'Testing',
+        badgeClass: 'bg-amber-950/90 text-amber-200 border-amber-500/40',
+      };
+    case 'loser':
+      return {
+        labelAr: 'مستبعد',
+        labelEn: 'Loser',
+        badgeClass: 'bg-rose-950/90 text-rose-200 border-rose-500/40',
+      };
+    case 'reference':
+    default:
+      return {
+        labelAr: 'مرجع',
+        labelEn: 'Reference',
+        badgeClass: 'bg-slate-900/90 text-slate-200 border-slate-500/40',
+      };
+  }
+}
+
+/**
+ * Deterministic fallback Creative Hook & Script Brief builder (inspired by ad-scout + swipefile).
+ * Used when Gemini API is rate-limited or offline so the user always gets actionable ad angles.
+ */
+export function buildFallbackCreativeAnalysis(
+  productName: string,
+  assetTitle: string,
+  platform = 'amazon'
+): CreativeHookAnalysis {
+  const cleanName = (productName || assetTitle || 'المنتج').trim();
+  const cleanTitle = (assetTitle || cleanName).trim();
+  const isTikTok = platform === 'tiktok';
+
+  return {
+    hooksAr: [
+      `لو بتدور على ${cleanName} يعتمد عليه فعلاً.. شوف التجربة العملية دي في 15 ثانية!`,
+      `الغلطة اللي أغلب الناس بتعملها قبل شراء ${cleanName} — وده الحل العملي من تجربة حقيقية.`,
+      `هل ${cleanName} يستاهل الضجة؟ اختبرناه في الاستخدام الفعلي ودي النتيجة بدون فلتر.`,
+      `وفّر وقتك ومجهودك في ثواني مع ${cleanName} — شوف الفرق قبل وبعد الاستخدام.`,
+    ],
+    hooksEn: [
+      `Stop buying weak alternatives — watch how this ${cleanName} performs under real testing.`,
+      `I tested this ${cleanName} so you don't have to: here is what surprised me in the first 10 seconds.`,
+      `3 reasons why thousands of buyers switched to this ${cleanName}.`,
+    ],
+    marketingAngleAr: isTikTok
+      ? `زاوية الإثبات العملي السريع (TikTok UGC Proof): إظهار النتيجة الفورية للمنتج (${cleanTitle}) في أول 3 ثوانٍ قبل الشرح.`
+      : `زاوية تجربة المشتري الحقيقي (Customer Proof & Problem-Solver): التركيز على المتانة وسهولة الاستخدام الفعلية بناءً على تقييمات العملاء.`,
+    marketingAngleEn:
+      'Problem-Solution + Real User Demonstration: Lead with the visual action shot in the first 3 seconds, then highlight durability and ease of use.',
+    offerCtaAr: 'اطلب الآن بخصم لفترة محدودة + ضمان استرجاع مع شحن سريع لباب البيت.',
+    scriptBriefAr: `[00:00 - 00:03] المشهد الافتتاحي (Hook): لقطة قريبة ومباشرة لـ (${cleanName}) أثناء التشغيل الفعلي مع نص واضح على الشاشة: "النتيجة في 10 ثواني!".
+[00:03 - 00:10] المشكلة والحل: استعراض سريع لكيفية حل المشكلة اليومية بدون تعقيد وبأداء قوي كما يظهر في الفيديو.
+[00:10 - 00:18] الإثبات (Social Proof): إظهار جودة الخامات والتفاصيل العملية التي أشاد بها المشترون في (${cleanTitle}).
+[00:18 - 00:25] الدعوة لاتخاذ إجراء (CTA): "اضغط على الرابط بالأسفل واطلبه الآن قبل نفاد الكمية".`,
+    whyItWorksAr:
+      'يعتمد هذا الفيديو على لقطة تجربة حقيقية غير مصطنعة (UGC)، مما يرفع معدل المشاهدة في أول 3 ثوانٍ (Thumbstop Rate) ويزيد ثقة المشتري المتردد.',
+    generatedAt: new Date().toISOString(),
+  };
+}
+

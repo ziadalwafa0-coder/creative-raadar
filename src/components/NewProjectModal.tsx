@@ -31,41 +31,44 @@ interface SamplePreset {
   notes: string;
 }
 
-const SAMPLE_PRESETS: SamplePreset[] = [
-  {
-    id: 'sample-espresso',
-    nameAr: 'ماكينة إسبريسو يدوية محمولة (Portable Espresso Maker)',
-    nameEn: 'Portable Handheld Espresso Maker',
-    url: 'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&q=80',
-    mediaType: 'both',
-    videoCount: 4,
-    photoCount: 6,
-    productListingUrl: 'https://www.amazon.com/dp/B07978C553',
-    notes: 'البحث عن فيديوهات ضخ القهوة اليدوي وصور الكريمة الحقيقية وتجارب التخييم',
-  },
-  {
-    id: 'sample-headphones',
-    nameAr: 'سماعات رأس لاسلكية بخاصية عزل الضوضاء (Wireless ANC Headphones)',
-    nameEn: 'Wireless Active Noise Cancelling Headphones',
-    url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80',
-    mediaType: 'video',
-    videoCount: 5,
-    photoCount: 4,
-    productListingUrl: 'https://www.amazon.com/dp/B08N5WRWNW',
-    notes: 'التركيز على مراجعات الميكروفون الحقيقية واختبار جودة عزل الصوت في الشارع',
-  },
-  {
-    id: 'sample-mouse',
-    nameAr: 'ماوس لاسلكي مريح للمكتب (Ergonomic Office Mouse)',
-    nameEn: 'Ergonomic Wireless Office Mouse',
-    url: 'https://images.unsplash.com/photo-1527864550417-7fd91fc51a46?w=800&q=80',
-    mediaType: 'both',
-    videoCount: 3,
-    photoCount: 5,
-    productListingUrl: 'https://www.amazon.com/dp/B09HM94VDS',
-    notes: 'البحث عن صور الماوس على مكاتب حقيقية وفيديوهات صوت النقرات الهادئة',
-  },
-];
+const isDemoMode = typeof import.meta !== 'undefined' && import.meta.env?.VITE_DEMO_MODE === 'true';
+const SAMPLE_PRESETS: SamplePreset[] = isDemoMode
+  ? [
+      {
+        id: 'sample-espresso',
+        nameAr: 'ماكينة إسبريسو يدوية محمولة (Portable Espresso Maker)',
+        nameEn: 'Portable Handheld Espresso Maker',
+        url: 'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&q=80',
+        mediaType: 'both',
+        videoCount: 4,
+        photoCount: 6,
+        productListingUrl: 'https://www.amazon.com/dp/B07978C553',
+        notes: 'البحث عن فيديوهات ضخ القهوة اليدوي وصور الكريمة الحقيقية وتجارب التخييم',
+      },
+      {
+        id: 'sample-headphones',
+        nameAr: 'سماعات رأس لاسلكية بخاصية عزل الضوضاء (Wireless ANC Headphones)',
+        nameEn: 'Wireless Active Noise Cancelling Headphones',
+        url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80',
+        mediaType: 'video',
+        videoCount: 5,
+        photoCount: 4,
+        productListingUrl: 'https://www.amazon.com/dp/B08N5WRWNW',
+        notes: 'التركيز على مراجعات الميكروفون الحقيقية واختبار جودة عزل الصوت في الشارع',
+      },
+      {
+        id: 'sample-mouse',
+        nameAr: 'ماوس لاسلكي مريح للمكتب (Ergonomic Office Mouse)',
+        nameEn: 'Ergonomic Wireless Office Mouse',
+        url: 'https://images.unsplash.com/photo-1527864550417-7fd91fc51a46?w=800&q=80',
+        mediaType: 'both',
+        videoCount: 3,
+        photoCount: 5,
+        productListingUrl: 'https://www.amazon.com/dp/B09HM94VDS',
+        notes: 'البحث عن صور الماوس على مكاتب حقيقية وفيديوهات صوت النقرات الهادئة',
+      },
+    ]
+  : [];
 
 export const NewProjectModal: React.FC = () => {
   const {

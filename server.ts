@@ -1,4 +1,3 @@
-import {filterTikTokProducts} from './src/server/tiktokMatch.ts';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
@@ -8,18 +7,21 @@ import dotenv from 'dotenv';
 import {
   DATA_DIR,
   DOWNLOADS_DIR,
+  POSTERS_DIR,
   GEMINI_API_KEY,
   IS_PROD,
   assertProductionConfig,
 } from './src/server/config.ts';
 import { StorageService } from './src/server/storage.ts';
 import { ProviderRegistry } from './src/server/connectors/ProviderRegistry.ts';
-import { analyzeProductImage, isGeminiConfigured } from './src/server/gemini.ts';
+import {
+  analyzeProductImage,
+  isGeminiConfigured,
+  generateCreativeHookAnalysis,
+} from './src/server/gemini.ts';
 import { streamExportArchive } from './src/server/exporter.ts';
-import { isFfmpegAvailable } from './src/server/downloader.ts';
-import { getScraplingStatus } from './src/server/scrapling.ts';
-import { handleProductCandidates, handleProductImageAnalysis } from './src/server/productCandidates.ts';
-import type { Project, SearchSettings } from './src/types/index.ts';
+import { isFfmpegAvailable, downloadMedia } from './src/server/downloader.ts';
+import type { Project, SearchSettings, CandidateAsset } from './src/types/index.ts';
 import {
   verifyAccessCode,
   getRateLimitKey,
@@ -38,9 +40,39 @@ import {
   handlePrepareExportZip,
   handleStreamExportZip,
   handleDebugAmazon,
+  handleDebugSearchTrace,
+  handleStreamPoster,
+  handleVerificationFeedback,
+  handleOwnerFeedbackLabel,
 } from './src/server/streamSearch.ts';
+import {
+  updateCachedIdentityCard,
+  upsertManualIdentityCard,
+  IdentityResolutionFailedError,
+  type IdentityCardV2,
+} from './src/server/pipeline/identity.ts';
+import {
+  getDailyGeminiBudgetStatus,
+  setSimulatedGeminiBudgetExhausted,
+} from './src/server/pipeline/verify.ts';
+import {
+  getRuntimeSettings,
+  updateRuntimeSettings,
+} from './src/server/settings.ts';
+import { runTikTokProviderSpike } from './src/server/sources/tiktok/index.ts';
+import { checkYtDlpVersion } from './src/server/tiktokVideos.ts';
+import {
+  fetchAmazonHtml,
+  isAmazonDeadListing,
+  hasAmazonProductMarker,
+} from './src/server/amazonHttp.ts';
+import {
+  markAsinAsDead,
+  isAsinMarkedDead,
+} from './src/server/amazonVideos.ts';
+import { fetch as undiciFetch } from 'undici';
 
-dotenv.config();
+dotenv.config({path:['.env.local','.env'],quiet:true});
 assertProductionConfig();
 
 function isDataDirWritable(): boolean {
@@ -68,7 +100,26 @@ export function runStartupChecks(): { gemini: boolean; ffmpeg: boolean; dataDirW
 }
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+
+function resolveListenPort(): number {
+  const portArgIdx = process.argv.indexOf('--port');
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    const cliPort = Number(process.argv[portArgIdx + 1]);
+    if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
+  }
+  if (process.env.DEFAULT_APP_PORT) {
+    const defaultAppPort = Number(process.env.DEFAULT_APP_PORT);
+    if (Number.isFinite(defaultAppPort) && defaultAppPort > 0) return defaultAppPort;
+  }
+  if (process.env.NGINX_PORT && process.env.PORT === process.env.NGINX_PORT) {
+    return 3000;
+  }
+  const envPort = Number(process.env.PORT);
+  if (Number.isFinite(envPort) && envPort > 0) return envPort;
+  return 3000;
+}
+
+const PORT = resolveListenPort();
 
 app.use(
   helmet({
@@ -104,7 +155,7 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
 const uploadJsonParser = express.json({ limit: '25mb' });
 app.use('/api/stream-search', uploadJsonParser);
 app.use('/api/projects', uploadJsonParser);
-app.use('/api/product-identity', uploadJsonParser);
+app.use('/api/gemini', uploadJsonParser);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -160,7 +211,7 @@ app.get('/api/health', async (_req: Request, res: Response) => {
   } catch {
     amazonReachable = false;
   }
-  res.json({ gemini, ffmpeg, amazonReachable, scrapling: getScraplingStatus() });
+  res.json({ gemini, ffmpeg, amazonReachable, release: 'import-20261110', commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 12) || null });
 });
 
 // -------------------------------------------------------------
@@ -285,6 +336,90 @@ app.get('/api/library', requireAuth, (req: Request, res: Response) => {
   res.json({ assets: storage.getLibrary(sid) });
 });
 
+app.post('/api/library', requireAuth, (req: Request, res: Response) => {
+  const sid = (req as any).sessionId;
+  const rawAsset = req.body?.asset as CandidateAsset | undefined;
+  if (!rawAsset || !rawAsset.id || !rawAsset.title) {
+    return res.status(400).json({ error: 'بيانات الفيديو غير مكتملة للحفظ في Swipe File' });
+  }
+  const enrichedAsset: CandidateAsset = {
+    ...rawAsset,
+    swipeVerdict: req.body?.verdict || rawAsset.swipeVerdict || 'winner',
+    editorNotes:
+      typeof req.body?.editorNotes === 'string' ? req.body.editorNotes : rawAsset.editorNotes,
+  };
+  const saved = storage.upsertSwipeItem(sid, enrichedAsset);
+
+  // Trigger background archival of the creative file so it remains cached on disk permanently
+  const mediaUrl = saved.downloadUrl || saved.mediaUrl;
+  if (mediaUrl && /^https?:\/\//i.test(mediaUrl)) {
+    downloadMedia(mediaUrl, saved.id, saved.mediaType || 'video').catch(() => {});
+  }
+
+  return res.status(201).json({ asset: saved, assets: storage.getLibrary(sid) });
+});
+
+app.patch('/api/library/:id', requireAuth, (req: Request, res: Response) => {
+  const sid = (req as any).sessionId;
+  const assetId = req.params.id;
+  const updated = storage.updateSwipeItem(sid, assetId, {
+    swipeVerdict: req.body?.swipeVerdict,
+    editorNotes: req.body?.editorNotes,
+    creativeAnalysis: req.body?.creativeAnalysis,
+  });
+  if (!updated) {
+    return res.status(404).json({ error: 'العنصر غير موجود في مكتبة Swipe File' });
+  }
+  return res.json({ asset: updated, assets: storage.getLibrary(sid) });
+});
+
+app.delete('/api/library/:id', requireAuth, (req: Request, res: Response) => {
+  const sid = (req as any).sessionId;
+  const ok = storage.removeSwipeItem(sid, req.params.id);
+  return res.json({ success: ok, assets: storage.getLibrary(sid) });
+});
+
+app.post('/api/gemini/creative-brief', requireAuth, async (req: Request, res: Response) => {
+  const productName = typeof req.body?.productName === 'string' ? req.body.productName.trim() : '';
+  const assetTitle =
+    typeof req.body?.assetTitle === 'string'
+      ? req.body.assetTitle.trim()
+      : typeof req.body?.videoTitle === 'string'
+      ? req.body.videoTitle.trim()
+      : '';
+  const platform = typeof req.body?.platform === 'string' ? req.body.platform.trim() : 'amazon';
+  const reviewerOrChannel =
+    typeof req.body?.reviewerOrChannel === 'string' ? req.body.reviewerOrChannel.trim() : undefined;
+  const sampleTitles = Array.isArray(req.body?.sampleTitles)
+    ? req.body.sampleTitles.map(String)
+    : undefined;
+
+  if (!productName && !assetTitle) {
+    return res.status(400).json({ error: 'يرجى تحديد اسم المنتج أو عنوان الفيديو لتوليد التحليل الإعلاني' });
+  }
+
+  try {
+    const analysis = await generateCreativeHookAnalysis({
+      productName,
+      assetTitle,
+      platform,
+      reviewerOrChannel,
+      sampleTitles,
+    });
+
+    if (typeof req.body?.assetId === 'string' && req.body.assetId.trim()) {
+      const sid = (req as any).sessionId;
+      storage.updateSwipeItem(sid, req.body.assetId.trim(), { creativeAnalysis: analysis });
+    }
+
+    return res.json({ analysis });
+  } catch (err: unknown) {
+    return res.status(500).json({
+      error: (err as Error)?.message || 'تعذر توليد تحليل الـ Hooks والملخص الإعلاني',
+    });
+  }
+});
+
 // -------------------------------------------------------------
 // Ephemeral Streaming Search & On-Demand Download (Zero Disk Persistence)
 // Works seamlessly in all environments including Vercel Serverless
@@ -296,32 +431,6 @@ app.post('/api/stream-search', requireAuth, (req: Request, res: Response) => {
     if (!res.headersSent) {
       res.status(500).json({ error: 'Internal streaming search error' });
     }
-  });
-});
-
-app.post('/api/product-identity/candidates', requireAuth, (req: Request, res: Response) => {
-  handleProductCandidates(req, res).catch(error => {
-    if (!res.headersSent && !res.destroyed) res.status(502).json({ error: error?.code === 'AMAZON_BLOCKED' ? 'أمازون لم يسمح بقراءة نتائج البحث الآن.' : 'تعذر تحميل صور المنتجات للمقارنة؛ لم يبدأ جمع الفيديوهات.' });
-  });
-});
-
-app.post('/api/tiktok/matches',requireAuth,async(req,res)=>{
-  const rows=req.body?.items;
-  if(!Array.isArray(rows)||rows.length>10||rows.some(row=>!row||typeof row.title!=='string'||typeof row.source!=='string')){res.sendStatus(400);return;}
-  const controller=new AbortController();
-  res.on('close',()=>{if(!res.writableEnded)controller.abort();});
-  try{
-    const matched=await filterTikTokProducts(rows,req.body,rows.length,AbortSignal.any([controller.signal,AbortSignal.timeout(45000)]));
-    if(!controller.signal.aborted)res.json({sources:matched.map(row=>row.source),posters:Object.fromEntries(matched.map(row=>[row.source,row.thumbnailUrl]))});
-  }catch{if(!controller.signal.aborted)res.status(503).json({sources:[]});}
-});
-app.get('/api/tiktok/status', requireAuth, (_req: Request, res: Response) => {
-  res.json({configured:Boolean(process.env.APIFY_API_TOKEN?.trim())});
-});
-
-app.post('/api/product-identity/analyze', requireAuth, (req: Request, res: Response) => {
-  handleProductImageAnalysis(req, res).catch(error => {
-    if (!res.headersSent && !res.destroyed) res.status(503).json({code:'IMAGE_ANALYSIS_UNAVAILABLE', error:'تعذر تحليل الصورة باستخدام Gemini الآن. التحليل المحلي المجاني متاح كبديل.'});
   });
 });
 
@@ -359,6 +468,46 @@ app.post('/api/stream-search/export-zip', requireAuth, (req: Request, res: Respo
   });
 });
 
+app.get('/api/stream-search/poster', (req: Request, res: Response) => {
+  handleStreamPoster(req, res);
+});
+
+app.get('/api/posters/:filename', (req: Request, res: Response) => {
+  const filename = path.basename(String(req.params.filename || '').trim());
+  if (!filename || !/^[a-zA-Z0-9_.-]+\.(jpg|jpeg|png|webp)$/i.test(filename)) {
+    return res.status(404).json({ error: 'Keyframe image not found' });
+  }
+  const filePath = path.join(POSTERS_DIR, filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Keyframe image not found' });
+  }
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.sendFile(path.resolve(filePath));
+});
+
+app.get('/api/debug/search', (req: Request, res: Response) => {
+  handleDebugSearchTrace(req, res);
+});
+
+app.post('/api/feedback', requireAuth, (req: Request, res: Response) => {
+  handleVerificationFeedback(req, res).catch((err) => {
+    console.error('[VerificationFeedback Error]', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: (err as Error)?.message || 'Feedback failed' });
+    }
+  });
+});
+
+app.post('/api/feedback/owner-label', requireAuth, (req: Request, res: Response) => {
+  handleOwnerFeedbackLabel(req, res).catch((err) => {
+    console.error('[OwnerFeedbackLabel Error]', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: (err as Error)?.message || 'Owner feedback failed' });
+    }
+  });
+});
+
 app.get('/api/debug/amazon', requireAuth, (req: Request, res: Response) => {
   handleDebugAmazon(req, res).catch((err) => {
     console.error('[DebugAmazon Error]', err);
@@ -366,6 +515,343 @@ app.get('/api/debug/amazon', requireAuth, (req: Request, res: Response) => {
       res.status(500).json({ error: (err as Error)?.message || 'Debug Amazon failed' });
     }
   });
+});
+
+app.get('/api/gemini/budget', requireAuth, (_req: Request, res: Response) => {
+  res.json(getDailyGeminiBudgetStatus());
+});
+
+app.post('/api/gemini/budget-simulate', requireAuth, (req: Request, res: Response) => {
+  const exhausted = Boolean(req.body?.exhausted);
+  setSimulatedGeminiBudgetExhausted(exhausted);
+  res.json(getDailyGeminiBudgetStatus());
+});
+
+app.post('/api/gemini/identify-image', requireAuth, async (req: Request, res: Response) => {
+  const rawImage = typeof req.body?.image === 'string' ? req.body.image.trim() : '';
+  const productHint = typeof req.body?.productName === 'string' ? req.body.productName.trim() : undefined;
+  const productUrl = typeof req.body?.productUrl === 'string' ? req.body.productUrl.trim() : undefined;
+  const simulateFailure = Boolean(req.body?.simulateFailure);
+
+  if (!rawImage) {
+    return res.status(400).json({ error: 'يرجى إرفاق صورة المنتج أولاً' });
+  }
+  if (!isGeminiConfigured() || simulateFailure) {
+    const failErr = new IdentityResolutionFailedError(
+      simulateFailure ? 'Simulated identity failure' : 'GEMINI_API_KEY not configured',
+      3
+    );
+    return res.status(422).json({
+      code: failErr.code,
+      requiresManualIdentity: true,
+      error: !isGeminiConfigured() ? 'تحليل الصور غير مُعدّ محليًا. أضف GEMINI_API_KEY إلى .env.local أو أدخل هوية المنتج يدويًا.' : failErr.arabicMessage,
+    });
+  }
+
+  try {
+    let mime = 'image/jpeg';
+    const m = rawImage.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/i);
+    if (m) mime = m[1];
+    const base64Clean = rawImage.replace(/^data:[^;]+;base64,/, '');
+    const profile = await analyzeProductImage(base64Clean, mime, undefined, productUrl, productHint);
+    if (
+      !profile.identityCardV2 ||
+      !profile.identityCardV2.mustMatch?.length ||
+      !profile.identityCardV2.mustNotBe?.length
+    ) {
+      const failErr = new IdentityResolutionFailedError('Empty mustMatch or mustNotBe', 3);
+      return res.status(422).json({
+        code: failErr.code,
+        requiresManualIdentity: true,
+        error: !isGeminiConfigured() ? 'تحليل الصور غير مُعدّ محليًا. أضف GEMINI_API_KEY إلى .env.local أو أدخل هوية المنتج يدويًا.' : failErr.arabicMessage,
+      });
+    }
+    return res.json({
+      profile,
+      identityCard: profile.identityCardV2,
+      commercialNameEn: profile.suggestedNameEn,
+      commercialNameAr: profile.suggestedNameAr,
+      amazonQueries: [
+        profile.suggestedNameEn,
+        ...(profile.multilingualQueries?.en || []),
+      ].filter(Boolean),
+    });
+  } catch (err: unknown) {
+    console.error('[GeminiIdentifyImage Error]', err);
+    const arabicMessage =
+      err instanceof IdentityResolutionFailedError
+        ? err.arabicMessage
+        : 'تعذر استخراج بطاقة الهوية البصرية للمنتج (mustMatch / mustNotBe) بعد 3 محاولات. يرجى تعبئة نموذج الهوية اليدوي للمتابعة.';
+    return res.status(422).json({
+      code: 'IDENTITY_RESOLUTION_FAILED',
+      requiresManualIdentity: true,
+      error: arabicMessage,
+    });
+  }
+});
+
+app.post('/api/gemini/identity-manual', requireAuth, (req: Request, res: Response) => {
+  const nameEn = typeof req.body?.nameEn === 'string' ? req.body.nameEn.trim() : '';
+  const nameAr = typeof req.body?.nameAr === 'string' ? req.body.nameAr.trim() : nameEn;
+  const mustMatch = Array.isArray(req.body?.mustMatch)
+    ? req.body.mustMatch.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const mustNotBe = Array.isArray(req.body?.mustNotBe)
+    ? req.body.mustNotBe.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+    : [];
+
+  if (!nameEn || mustMatch.length === 0 || mustNotBe.length === 0) {
+    return res.status(400).json({
+      error: 'يرجى إدخال الاسم الإنجليزي للمنتج وسمة إلزامية واحدة على الأقل (mustMatch) ومستبعد واحد على الأقل (mustNotBe).',
+    });
+  }
+
+  const card = upsertManualIdentityCard({
+    imageHash: typeof req.body?.imageHash === 'string' ? req.body.imageHash.trim() : undefined,
+    nameEn,
+    nameAr,
+    formFactorShape: typeof req.body?.formFactorShape === 'string' ? req.body.formFactorShape.trim() : undefined,
+    mechanismHowItWorks:
+      typeof req.body?.mechanismHowItWorks === 'string' ? req.body.mechanismHowItWorks.trim() : undefined,
+    mustMatch,
+    mustNotBe,
+    discriminators: Array.isArray(req.body?.discriminators) ? req.body.discriminators : undefined,
+  });
+
+  return res.json({
+    identityCard: card,
+    commercialNameEn: card.nameEn,
+    commercialNameAr: card.nameAr,
+    amazonQueries: card.queries.amazonEn,
+  });
+});
+
+app.patch('/api/gemini/identity', requireAuth, (req: Request, res: Response) => {
+  const imageHash = typeof req.body?.imageHash === 'string' ? req.body.imageHash.trim() : '';
+  if (!imageHash) {
+    return res.status(400).json({ error: 'imageHash is required' });
+  }
+  const attributeStrengths =
+    req.body?.attributeStrengths && typeof req.body.attributeStrengths === 'object'
+      ? req.body.attributeStrengths
+      : undefined;
+  if (attributeStrengths) {
+    const currentSettings = getRuntimeSettings();
+    updateRuntimeSettings({
+      attributeStrengthOverrides: {
+        ...currentSettings.attributeStrengthOverrides,
+        ...attributeStrengths,
+      },
+    });
+  }
+  const updated = updateCachedIdentityCard(imageHash, {
+    nameEn: typeof req.body?.nameEn === 'string' ? req.body.nameEn.trim() : undefined,
+    nameAr: typeof req.body?.nameAr === 'string' ? req.body.nameAr.trim() : undefined,
+    mustMatch: Array.isArray(req.body?.mustMatch) ? req.body.mustMatch.map(String) : undefined,
+    mustNotBe: Array.isArray(req.body?.mustNotBe) ? req.body.mustNotBe.map(String) : undefined,
+    attributeStrengths,
+    discriminators: Array.isArray(req.body?.discriminators) ? req.body.discriminators : undefined,
+  });
+  if (!updated) {
+    return res.status(404).json({ error: 'Identity card not found in cache' });
+  }
+  return res.json({ identityCard: updated });
+});
+
+app.get('/api/settings', (_req: Request, res: Response) => {
+  res.json(getRuntimeSettings());
+});
+
+app.put('/api/settings', requireAuth, (req: Request, res: Response) => {
+  const updated = updateRuntimeSettings(req.body || {});
+  res.json(updated);
+});
+
+app.post('/api/debug/tiktok-probe', async (req: Request, res: Response) => {
+  try {
+    const rawCard = req.body?.identityCard as Partial<IdentityCardV2> | undefined;
+    const productName =
+      typeof req.body?.productName === 'string' && req.body.productName.trim()
+        ? req.body.productName.trim()
+        : rawCard?.nameEn || 'Shiatsu Neck and Back Massager Pillow with Heat';
+    const directUrls = Array.isArray(req.body?.directUrls)
+      ? req.body.directUrls.map(String).filter(Boolean)
+      : [];
+
+    const synthCard: IdentityCardV2 = {
+      imageHash: rawCard?.imageHash || 'probe',
+      nameEn: rawCard?.nameEn || productName,
+      nameAr: rawCard?.nameAr || productName,
+      category: rawCard?.category || 'General',
+      primaryColor: rawCard?.primaryColor || 'Standard',
+      formFactor: rawCard?.formFactor || {
+        shape: productName,
+        approximateSize: 'Standard',
+        orientationPlacement: 'Standard',
+      },
+      mechanism: rawCard?.mechanism || {
+        howItWorks: productName,
+        powerSource: 'Standard',
+        keyComponents: [productName],
+      },
+      mustMatch: rawCard?.mustMatch || [],
+      variableAttributes: rawCard?.variableAttributes || [],
+      mustNotBe: rawCard?.mustNotBe || [],
+      queries: rawCard?.queries || {
+        amazonEn: [productName],
+        amazonAr: [productName],
+        tiktokEn: [productName],
+        tiktokAr: [productName],
+        tradeNamesEn: [],
+      },
+      hashtags: rawCard?.hashtags || [],
+      confidence: 0.9,
+      ambiguity: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    const report = await runTikTokProviderSpike(synthCard, directUrls);
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error)?.message || 'TikTok live probe failed' });
+  }
+});
+
+interface LinkValidationCacheEntry {
+  valid: boolean;
+  reason?: string;
+  expiresAt: number;
+}
+const linkValidationCache = new Map<string, LinkValidationCacheEntry>();
+const REPORTED_DEAD_LINKS_FILE = path.join(DATA_DIR, 'reported_dead_links.json');
+
+app.post('/api/links/validate', async (req: Request, res: Response) => {
+  const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+  const asin = typeof req.body?.asin === 'string' ? req.body.asin.trim().toUpperCase() : undefined;
+  const type = req.body?.type === 'video' ? 'video' : 'product';
+
+  if (!url) {
+    return res.status(400).json({ error: 'url is required' });
+  }
+
+  // 1. Check if ASIN is marked dead in negative cache
+  if (asin) {
+    const deadCheck = isAsinMarkedDead(asin);
+    if (deadCheck.isDead) {
+      return res.json({ valid: false, reason: deadCheck.reason || 'صفحة المنتج غير متاحة (Dead listing)' });
+    }
+  }
+
+  // 2. Check 24h link cache
+  const cached = linkValidationCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) {
+    return res.json({ valid: cached.valid, reason: cached.reason, fromCache: true });
+  }
+
+  try {
+    if (type === 'video') {
+      const resp = await undiciFetch(url, {
+        method: 'HEAD',
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      });
+      const valid = resp.status >= 200 && resp.status < 400;
+      linkValidationCache.set(url, {
+        valid,
+        reason: valid ? undefined : `HTTP ${resp.status}`,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      });
+      return res.json({ valid, reason: valid ? undefined : `HTTP ${resp.status}` });
+    }
+
+    const isAmz = url.includes('amazon.');
+    if (isAmz) {
+      try {
+        const html = await fetchAmazonHtml(url, {
+          minHtmlChars: 500,
+          timeoutMs: 8000,
+        });
+        const deadCheck = isAmazonDeadListing(200, html, url);
+        if (deadCheck.isDead) {
+          if (asin) markAsinAsDead(asin, deadCheck.reason || 'Dead listing 404');
+          linkValidationCache.set(url, {
+            valid: false,
+            reason: deadCheck.reason || 'صفحة المنتج غير متاحة',
+            expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+          });
+          return res.json({ valid: false, reason: deadCheck.reason || 'صفحة المنتج غير متاحة' });
+        }
+        linkValidationCache.set(url, {
+          valid: true,
+          expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+        });
+        return res.json({ valid: true });
+      } catch (err: any) {
+        if (err.name === 'AmazonDeadListingError') {
+          if (asin) markAsinAsDead(asin, err.reason || 'Dead listing 404');
+          linkValidationCache.set(url, {
+            valid: false,
+            reason: err.reason || 'صفحة المنتج غير متاحة',
+            expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+          });
+          return res.json({ valid: false, reason: err.reason || 'صفحة المنتج غير متاحة' });
+        }
+        return res.json({ valid: true, unverified: true });
+      }
+    }
+
+    const resp = await undiciFetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    });
+    const valid = resp.status >= 200 && resp.status < 400;
+    linkValidationCache.set(url, {
+      valid,
+      reason: valid ? undefined : `HTTP ${resp.status}`,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    });
+    return res.json({ valid, reason: valid ? undefined : `HTTP ${resp.status}` });
+  } catch (err) {
+    return res.json({ valid: false, reason: (err as Error)?.message || 'Validation error' });
+  }
+});
+
+app.post('/api/links/report-dead', (req: Request, res: Response) => {
+  const asin = typeof req.body?.asin === 'string' ? req.body.asin.trim().toUpperCase() : undefined;
+  const url = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+  const searchId = typeof req.body?.searchId === 'string' ? req.body.searchId.trim() : undefined;
+  const assetId = typeof req.body?.assetId === 'string' ? req.body.assetId.trim() : undefined;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : 'User reported broken link';
+
+  if (asin) {
+    markAsinAsDead(asin, reason);
+  }
+  if (url) {
+    linkValidationCache.set(url, {
+      valid: false,
+      reason,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    });
+  }
+
+  try {
+    let reports: any[] = [];
+    if (fs.existsSync(REPORTED_DEAD_LINKS_FILE)) {
+      reports = JSON.parse(fs.readFileSync(REPORTED_DEAD_LINKS_FILE, 'utf-8'));
+    }
+    reports.push({
+      asin,
+      url,
+      searchId,
+      assetId,
+      reason,
+      reportedAt: new Date().toISOString(),
+    });
+    fs.writeFileSync(REPORTED_DEAD_LINKS_FILE, JSON.stringify(reports.slice(-500), null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('[ReportDeadLink] Error saving report:', (err as Error)?.message);
+  }
+
+  return res.json({ success: true, pruned: true, asin, url });
 });
 
 app.get('/api/projects', requireAuth, (req: Request, res: Response) => {
@@ -744,7 +1230,15 @@ app.all('/api/*', requireAuth, (_req: Request, res: Response) => {
 
 async function startServer() {
   runStartupChecks();
-  const isProd = process.env.NODE_ENV === 'production';
+  const distPath = path.resolve(process.cwd(), 'dist');
+  const hasBuiltDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const isDevContainer = Boolean(
+    process.env.CONTROL_PLANE_PORT ||
+    process.env.DEFAULT_APP_PORT ||
+    process.argv.includes('--port')
+  );
+  const isProd =
+    process.env.NODE_ENV === 'production' || (!isDevContainer && hasBuiltDist);
 
   if (!isProd) {
     const { createServer } = await import('vite');
@@ -754,15 +1248,25 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Creative Radaar server running on http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Creative Radaar server running on http://0.0.0.0:${PORT} (mode=${isProd ? 'production' : 'development'})`);
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE' && PORT !== 3000) {
+      console.warn(`[Server] Port ${PORT} is in use, falling back to port 3000...`);
+      app.listen(3000, '0.0.0.0', () => {
+        console.log(`Creative Radaar server running on http://0.0.0.0:3000 (fallback)`);
+      });
+    } else {
+      console.error('[Server] Fatal listen error:', err);
+    }
   });
 }
 

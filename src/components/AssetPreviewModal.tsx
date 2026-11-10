@@ -13,8 +13,6 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
   const { lang, downloadWithSession, sessionId } = useApp();
   const [isDownloading, setIsDownloading] = useState(false);
 
-  const [failedSrc,setFailedSrc]=useState<string>();
-
   if (!asset) return null;
 
   const provInfo = getProvenanceLabel(asset.provenance, lang);
@@ -26,7 +24,10 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
       !targetMediaUrl?.includes('youtube.com') &&
       !targetMediaUrl?.includes('youtu.be'));
 
-  const isEphemeral = !asset.projectId || asset.projectId.startsWith('ephemeral-');
+  const isEphemeral =
+    !asset.projectId ||
+    asset.projectId.startsWith('ephemeral-') ||
+    asset.projectId.startsWith('swipe-');
   const tokenParam = sessionId ? `&token=${encodeURIComponent(sessionId)}` : '';
   const streamPreviewSrc =
     isEphemeral && targetMediaUrl
@@ -63,14 +64,22 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#E2E5DF] bg-[#FAFBF9]">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-xs font-bold px-2.5 py-0.5 rounded-md border shrink-0 bg-[#EAF3F2] text-[#247C72] border-[#247C72]/30">
-              {asset.platform==='tiktok'?'TikTok':'أمازون • Amazon'}
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <span
+              className={`text-xs font-bold px-2.5 py-0.5 rounded-md border shrink-0 ${
+                asset.platform === 'tiktok' || asset.sourceUrl?.includes('tiktok.com')
+                  ? 'bg-[#181B1A] text-white border-[#181B1A]'
+                  : 'bg-[#EAF3F2] text-[#247C72] border-[#247C72]/30'
+              }`}
+            >
+              {asset.platform === 'tiktok' || asset.sourceUrl?.includes('tiktok.com')
+                ? 'تيك توك • TikTok'
+                : 'أمازون • Amazon'}
             </span>
             <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-md border shrink-0 ${provInfo.badge}`}>
               {provInfo.label}
             </span>
-            <h3 className="text-sm font-bold text-[#181B1A] truncate">
+            <h3 className="text-sm font-bold text-[#181B1A] truncate max-w-xs sm:max-w-md">
               {asset.title}
             </h3>
           </div>
@@ -83,14 +92,47 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
           </button>
         </div>
 
-        {/* Media Player */}
+        {/* Body Content */}
         <div className="p-5 space-y-4 overflow-y-auto">
+          {asset.downloadFailureReason && (
+            <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold flex items-center justify-between gap-2">
+              <span>وضع العرض المضمّن (Embed) — تنزيل غير متاح: {asset.downloadFailureReason}</span>
+              <a
+                href={asset.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-bold text-amber-950"
+              >
+                فتح على تيك توك
+              </a>
+            </div>
+          )}
+
           <div className="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center">
-            {isVideo ? (
+            {!isDownloaded &&
+            (asset.platform === 'tiktok' || asset.sourceUrl?.includes('tiktok.com')) ? (
+              (() => {
+                const match = (asset.sourceUrl || '').match(/\/video\/(\d+)/);
+                const videoId = match ? match[1] : null;
+                return videoId ? (
+                  <iframe
+                    src={`https://www.tiktok.com/embed/v2/${videoId}`}
+                    title={asset.title}
+                    className="w-full h-full border-0 bg-black"
+                    allow="encrypted-media;"
+                    allowFullScreen
+                  />
+                ) : (
+                  <img
+                    src={asset.thumbnailUrl}
+                    alt={asset.title}
+                    className="w-full h-full object-contain"
+                  />
+                );
+              })()
+            ) : isVideo ? (
               <video
                 key={streamPreviewSrc}
-                onError={()=>setFailedSrc(streamPreviewSrc)}
-                onLoadedMetadata={()=>setFailedSrc(undefined)}
                 preload="metadata"
                 src={streamPreviewSrc}
                 poster={asset.thumbnailUrl}
@@ -110,10 +152,8 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
             )}
           </div>
 
-          {failedSrc && failedSrc===streamPreviewSrc && <p role="alert" className="text-sm text-red-700">تعذّر تحميل الملف للمعاينة. لو الرابط انتهت صلاحيته، حدّث البحث لجلب رابط جديد.</p>}
-          {/* Actions Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {isDownloaded && (
                 <button
                   onClick={handleDownloadSingle}
@@ -125,7 +165,7 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
                   ) : (
                     <Download className="w-4 h-4" />
                   )}
-                  <span>تنزيل الملف</span>
+                  <span>{isVideo ? 'تنزيل الفيديو (.MP4)' : 'تنزيل الصورة'}</span>
                 </button>
               )}
 
@@ -135,7 +175,7 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 py-2 px-3.5 rounded-xl border border-[#E2E5DF] hover:bg-[#F6F7F4] text-[#181B1A] text-xs font-semibold transition-colors"
               >
-                <span>{asset.platform==='tiktok'?'المنشور الأصلي على تيك توك (خارجي)':'فتح المصدر'}</span>
+                <span>فتح المصدر</span>
                 <ExternalLink className="w-3.5 h-3.5 text-[#616764]" />
               </a>
 
@@ -146,7 +186,7 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 py-2 px-3.5 rounded-xl border border-[#247C72]/30 bg-[#EAF3F2] hover:bg-[#DCECE9] text-[#247C72] text-xs font-semibold transition-colors"
                 >
-                  <span>صفحة المنتج على أمازون</span>
+                  <span>صفحة المنتج</span>
                   <ExternalLink className="w-3.5 h-3.5 text-[#247C72]" />
                 </a>
               )}
@@ -154,7 +194,7 @@ export const AssetPreviewModal: React.FC<Props> = ({ asset, onClose }) => {
 
             {asset.reviewerOrChannel && (
               <span className="text-xs text-[#616764]">
-                المصدر: <strong className="text-[#181B1A]">{asset.reviewerOrChannel}</strong>
+                المراجع: <strong className="text-[#181B1A]">{asset.reviewerOrChannel}</strong>
               </span>
             )}
           </div>

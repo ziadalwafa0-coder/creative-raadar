@@ -1,0 +1,484 @@
+{
+  "fixtureId": "tiktok_wrong_product",
+  "capturedAt": "2026-11-08T16:28:50.956Z",
+  "searchId": "s-1794153375794-0iuikfm",
+  "screenshotPath": "eval/fixtures/tiktok_false_positives.png",
+  "ownerReferenceNote": "Uploaded product is a Front Center Console Quilted Diamond-Stitched Armrest Cushion Pad (strap-on pad with front tissue slot, dual rear cup holders, side pockets). It is NOT a full rear-seat armrest box, NOT a 15W wireless charger console box, and NOT a Toyota Highlander replacement console.",
+  "identityCardUsed": {
+    "imageHash": "78d3ab0e70f2fa2be2c4c0c4",
+    "nameEn": "Car Center Console Armrest Pad with Cup Holder",
+    "nameAr": "Car Center Console Armrest Pad with Cup Holder",
+    "category": "General",
+    "primaryColor": "Standard",
+    "formFactor": {
+      "shape": "Car Center Console Armrest Pad with Cup Holder",
+      "approximateSize": "Standard",
+      "orientationPlacement": "Standard"
+    },
+    "mechanism": {
+      "howItWorks": "Car Center Console Armrest Pad with Cup Holder",
+      "powerSource": "Standard",
+      "keyComponents": [
+        "Quilted diamond pattern stitching",
+        "Integrated dual-circle cup holder tray",
+        "Front-facing rectangular storage slot",
+        "Side-mounted storage pocket flap"
+      ]
+    },
+    "mustMatch": [
+      "Quilted diamond pattern stitching",
+      "Integrated dual-circle cup holder tray",
+      "Front-facing rectangular storage slot",
+      "Side-mounted storage pocket flap",
+      "35cm x 20cm dimensions"
+    ],
+    "attributeStrengths": {
+      "Quilted diamond pattern stitching": "soft",
+      "Integrated dual-circle cup holder tray": "hard",
+      "Front-facing rectangular storage slot": "soft",
+      "Side-mounted storage pocket flap": "hard",
+      "35cm x 20cm dimensions": "hard"
+    },
+    "variableAttributes": [
+      "body color",
+      "brand name or logo",
+      "retail box artwork",
+      "cable length"
+    ],
+    "mustNotBe": [
+      "Stand-alone cup holder",
+      "Car seat gap filler",
+      "Steering wheel cover",
+      "Car floor mat",
+      "Dashboard cover",
+      "Backseat organizer",
+      "Car headrest pillow",
+      "Folding car tray"
+    ],
+    "queries": {
+      "amazonEn": [
+        "Car Center Console Armrest Pad with Cup Holder"
+      ],
+      "amazonAr": [
+        "Car Center Console Armrest Pad with Cup Holder"
+      ],
+      "tiktokEn": [
+        "Car Center Console Armrest Pad with Cup Holder"
+      ],
+      "tiktokAr": [
+        "Car Center Console Armrest Pad with Cup Holder"
+      ],
+      "tradeNamesEn": []
+    },
+    "hashtags": [],
+    "confidence": 1,
+    "ambiguity": [],
+    "createdAt": "2026-11-08T15:58:20.994Z"
+  },
+  "tiktokQueriesSent": [
+    {
+      "round": "R1_tiktok_serp",
+      "source": "tiktok",
+      "query": "Armrest Pad Cup Holder | Car Center Console Armrest",
+      "page": 1,
+      "candidatesFound": 35,
+      "newCandidatesCount": 35,
+      "verifiedCount": 5,
+      "videosFound": 5,
+      "durationMs": 100,
+      "status": "ok",
+      "timestamp": "2026-11-08T15:58:23.397Z"
+    }
+  ],
+  "amazonQueriesSent": [
+    {
+      "round": "R1_identity_p1",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "Car Center Console Armrest Pad with Cup Holder",
+      "sortVariant": "relevance",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1530,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=Car+Center+Console+Armrest+Pad+with+Cup+Holder: HTML body too short (2409 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:22.667Z"
+    },
+    {
+      "round": "R1_identity_p1",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "car center console cover",
+      "sortVariant": "relevance",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1510,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=car+center+console+cover: HTML body too short (2307 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:24.177Z"
+    },
+    {
+      "round": "R1_identity_p1",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "car center console organizer",
+      "sortVariant": "relevance",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1663,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=car+center+console+organizer: HTML body too short (2321 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:25.840Z"
+    },
+    {
+      "round": "R2_synonyms_p1",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "car center console",
+      "sortVariant": "relevance",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1513,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=car+center+console: HTML body too short (2279 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:34.618Z"
+    },
+    {
+      "round": "R2_synonyms_p1",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "car center console cup holder",
+      "sortVariant": "relevance",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1510,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=car+center+console+cup+holder: HTML body too short (2328 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:36.128Z"
+    },
+    {
+      "round": "R2_synonyms_p1",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "car seat gap filler organizer with cup holder",
+      "sortVariant": "relevance",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1658,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=car+seat+gap+filler+organizer+with+cup+holder: HTML body too short (2403 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:37.786Z"
+    },
+    {
+      "round": "R2_sort_review-rank",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "Car Center Console Armrest Pad with Cup Holder [review-rank]",
+      "sortVariant": "review-rank",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1478,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=Car+Center+Console+Armrest+Pad+with+Cup+Holder&s=review-rank: HTML body too short (2475 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:39.264Z"
+    },
+    {
+      "round": "R2_sort_popularity-rank",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "Car Center Console Armrest Pad with Cup Holder [popularity-rank]",
+      "sortVariant": "popularity-rank",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1607,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=Car+Center+Console+Armrest+Pad+with+Cup+Holder&s=exact-aware-popularity-rank: HTML body too short (2533 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:40.871Z"
+    },
+    {
+      "round": "R4_deep_page_2",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "Car Center Console Armrest Pad with Cup Holder",
+      "sortVariant": "relevance",
+      "page": 2,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1531,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=Car+Center+Console+Armrest+Pad+with+Cup+Holder&page=2: HTML body too short (2446 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:42.402Z"
+    },
+    {
+      "round": "R4_deep_page_2",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "car center console cover",
+      "sortVariant": "relevance",
+      "page": 2,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1625,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=car+center+console+cover&page=2: HTML body too short (2344 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:44.027Z"
+    },
+    {
+      "round": "R4_deep_page_3",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "Car Center Console Armrest Pad with Cup Holder",
+      "sortVariant": "relevance",
+      "page": 3,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1706,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=Car+Center+Console+Armrest+Pad+with+Cup+Holder&page=3: HTML body too short (2447 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:45.733Z"
+    },
+    {
+      "round": "R4_deep_page_3",
+      "source": "amazon",
+      "marketplace": "US",
+      "query": "car center console cover",
+      "sortVariant": "relevance",
+      "page": 3,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1473,
+      "status": "blocked",
+      "error": "Amazon blocked request (200) for https://www.amazon.com/s?k=car+center+console+cover&page=3: HTML body too short (2345 < 5000 chars)",
+      "timestamp": "2026-11-08T15:58:47.206Z"
+    },
+    {
+      "round": "R4_marketplace_UK",
+      "source": "amazon",
+      "marketplace": "UK",
+      "query": "Car Center Console Armrest Pad with Cup Holder",
+      "sortVariant": "relevance",
+      "page": 1,
+      "candidatesFound": 0,
+      "newCandidatesCount": 0,
+      "verifiedCount": 0,
+      "videosFound": 0,
+      "durationMs": 1434,
+      "status": "blocked",
+      "error": "Amazon blocked request (503) for https://www.amazon.co.uk/s?k=Car+Center+Console+Armrest+Pad+with+Cup+Holder: HTTP status 503",
+      "timestamp": "2026-11-08T15:58:48.640Z"
+    }
+  ],
+  "falsePositiveCards": [
+    {
+      "videoId": "7514170420396838160",
+      "url": "https://www.tiktok.com/@ggdreamcar/video/7514170420396838160",
+      "caption": "🚗 Multi-Function Car Armrest Pad with built-in cup holder, tissue box & phone pocket! 🌟 Raised design for driving comfort. 🚗 Maximize car space, stylish & practical!",
+      "thumbnailUrl": "https://p16-common-sign.tiktokcdn-eu.com/tos-alisg-p-0037/ooQDoRD6Wy07CByHfAHBkzjAEScHP7BQrgfFVZ~tplv-tiktokx-origin.image?dr=10395&x-expires=1794322800&x-signature=G%2Bg%2BlZd1xlir%2F5AXrorhmDzzYH8%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=useast2b",
+      "evidenceUsed": {
+        "type": "oEmbed_thumbnail_and_caption_only",
+        "thumbnailSource": "tiktok_cover",
+        "ffmpegFramesExtracted": 0
+      },
+      "referenceSimilarity": 0.827,
+      "cachedGeminiVerdict": {
+        "id": "7514170420396838160",
+        "approved": true,
+        "verdict": "variant",
+        "verdictTier": "same_design_variant",
+        "reasonCode": null,
+        "failedHardAttributes": [],
+        "failedSoftAttributes": [
+          "red trim piping"
+        ],
+        "verifiedByAi": true,
+        "formFactorMatches": true,
+        "mechanismMatches": true,
+        "colorMatches": false,
+        "mustNotBeHit": [],
+        "confidence": 0.9,
+        "referenceSimilarity": 0.827,
+        "reasonAr": "يظهر المنتج في الصورة وسادة مسند ذراع بنفس الوظائف والشكل، ولكنه يتميز بحواف حمراء، مما يجعله نوعًا مختلفًا من حيث التصميم اللوني فقط.",
+        "stage": "visual_stage2_gemini"
+      },
+      "finalTierAssigned": "same_design_variant",
+      "ownerGroundTruth": "incorrect_product",
+      "whyItEarnedMatchBadge": "Evaluated on a single cover thumbnail (0 ffmpeg keyframes) with SOFT-downgraded stitching/slot attributes and side-by-side yes-bias."
+    },
+    {
+      "videoId": "7468197375589256465",
+      "url": "https://www.tiktok.com/@lucky_blue_car/video/7468197375589256465",
+      "caption": "🚗Four-in-one armrest box car height-increasing pad, comes with a cup holder, tissue box, can also hold a mobile phone, carefully designed two side pockets, #CarSupplies# Car armrest box multifunctional height-increasing pad",
+      "thumbnailUrl": "https://p16-common-sign.tiktokcdn-eu.com/tos-alisg-p-0037/osiKaVIk1GhWb9BmAwPwiHAoBeIhhmgEAi0zXB~tplv-tiktokx-origin.image?dr=10395&x-expires=1794322800&x-signature=C%2Ba5Ut1BM80AHoAv2tQvJDKb%2FHo%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=useast2b",
+      "evidenceUsed": {
+        "type": "oEmbed_thumbnail_and_caption_only",
+        "thumbnailSource": "tiktok_cover",
+        "ffmpegFramesExtracted": 0
+      },
+      "referenceSimilarity": 0.884,
+      "cachedGeminiVerdict": {
+        "id": "7468197375589256465",
+        "approved": true,
+        "verdict": "same_design",
+        "verdictTier": "exact",
+        "reasonCode": null,
+        "failedHardAttributes": [],
+        "failedSoftAttributes": [],
+        "verifiedByAi": true,
+        "formFactorMatches": true,
+        "mechanismMatches": true,
+        "colorMatches": true,
+        "mustNotBeHit": [],
+        "confidence": 1,
+        "referenceSimilarity": 0.884,
+        "reasonAr": "هذا المنتج هو نفسه الموضح في الصورة المرجعية تمامًا، حيث تظهر فيه فتحات حامل الأكواب المزدوجة، ونمط الخياطة الماسي، والجيوب الجانبية، وفتحة مناديل أمامية.",
+        "stage": "visual_stage2_gemini"
+      },
+      "finalTierAssigned": "exact",
+      "ownerGroundTruth": "incorrect_product",
+      "whyItEarnedMatchBadge": "Single thumbnail + seller-title caption listing \"cup holder, tissue box, mobile phone, two side pockets\" triggered side-by-side Gemini prompt yes-bias with 0 video keyframes extracted."
+    },
+    {
+      "videoId": "7689713827650325781",
+      "url": "https://www.tiktok.com/@yc36010/video/7689713827650325781",
+      "caption": "Rear seat armrest box ✨ For Sedans & SUVs 15W built-in wireless charger Cup holders + large storage Soft PU leather No drilling installation Car interior upgrade",
+      "thumbnailUrl": "https://p19-common-sign.tiktokcdn-eu.com/tos-alisg-p-0037/oUArDGbVQAobetBIgDtIeOLydQNjAbLjVuC0ie~tplv-tiktokx-origin.image?dr=10395&x-expires=1794322800&x-signature=C70vxNkyYG8Vp0V4xlTIqlc2wpA%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=useast2b",
+      "evidenceUsed": {
+        "type": "oEmbed_thumbnail_and_caption_only",
+        "thumbnailSource": "tiktok_cover",
+        "ffmpegFramesExtracted": 0
+      },
+      "referenceSimilarity": 0.88,
+      "cachedGeminiVerdict": {
+        "id": "7689713827650325781",
+        "approved": true,
+        "verdict": "same_design",
+        "verdictTier": "exact",
+        "reasonCode": null,
+        "failedHardAttributes": [],
+        "failedSoftAttributes": [],
+        "verifiedByAi": true,
+        "formFactorMatches": true,
+        "mechanismMatches": true,
+        "colorMatches": true,
+        "mustNotBeHit": [],
+        "confidence": 1,
+        "referenceSimilarity": 0.88,
+        "reasonAr": "المنتج هو نفسه تماماً ويتم وضعه كمسند ذراع خلفي مع حامل أكواب كما هو موضح في صورة المرجع.",
+        "stage": "visual_stage2_gemini"
+      },
+      "finalTierAssigned": "exact",
+      "ownerGroundTruth": "incorrect_product",
+      "whyItEarnedMatchBadge": "Rear seat armrest box with 15W wireless charger was compared side-by-side with only 1 thumbnail; Gemini hallucinated that rear-seat placement matched the reference pad because placement and wireless charger were not blind HARD discriminators."
+    },
+    {
+      "videoId": "7502624726137736455",
+      "url": "https://www.tiktok.com/@car.supplies4/video/7502624726137736455",
+      "caption": "Toyota Highlander rear seat armrest box#toyota #autoparts #carinterior",
+      "thumbnailUrl": "https://p19-common-sign.tiktokcdn-eu.com/tos-alisg-p-0037/o8XdQEFpg9U7u7YeBCDAQzHkRnogrBIErqExfM~tplv-tiktokx-origin.image?dr=10395&x-expires=1794322800&x-signature=Pr2xRPT%2BR0oBWZ2i1XbfWVe65hk%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=useast2b",
+      "evidenceUsed": {
+        "type": "oEmbed_thumbnail_and_caption_only",
+        "thumbnailSource": "tiktok_cover",
+        "ffmpegFramesExtracted": 0
+      },
+      "referenceSimilarity": 0.859,
+      "cachedGeminiVerdict": {
+        "id": "7502624726137736455",
+        "approved": true,
+        "verdict": "variant",
+        "verdictTier": "same_design_variant",
+        "reasonCode": null,
+        "failedHardAttributes": [],
+        "failedSoftAttributes": [
+          "Different color/material",
+          "Larger integrated console structure"
+        ],
+        "verifiedByAi": true,
+        "formFactorMatches": true,
+        "mechanismMatches": true,
+        "colorMatches": false,
+        "mustNotBeHit": [],
+        "confidence": 0.95,
+        "referenceSimilarity": 0.859,
+        "reasonAr": "هذا المنتج هو مسند ذراع مركزي مع حامل أكواب مصمم خصيصاً ليناسب نفس وظيفة وشكل المنتج المرجعي.",
+        "stage": "visual_stage2_gemini"
+      },
+      "finalTierAssigned": "same_design_variant",
+      "ownerGroundTruth": "incorrect_product",
+      "whyItEarnedMatchBadge": "Toyota Highlander full rear seat console box: Gemini noted \"Larger integrated console structure\" in failedSoftAttributes instead of rejecting as a HARD construction/placement conflict."
+    },
+    {
+      "videoId": "7690894906847481102",
+      "url": "https://www.tiktok.com/@sungsung1680/video/7690894906847481102",
+      "caption": "Multifunctional car center console armrest cushion. #caracessories #cargadgets #centerconsolesonly #armrest #carhacks",
+      "thumbnailUrl": "https://p16-common-sign.tiktokcdn-eu.com/tos-useast5-p-0068-tx/oIIjZSQ3XdoqlfGACAeeLqAkBjQURvHHHxdVGI~tplv-tiktokx-origin.image?dr=10395&x-expires=1794326400&x-signature=SF7C9ZXQheQ5A4SEZCkkNjhdQ%2FQ%3D&t=4d5b0474&ps=13740610&shp=81f88b70&shcp=43f4a2f9&idc=useast2b",
+      "evidenceUsed": {
+        "type": "oEmbed_thumbnail_and_caption_only",
+        "thumbnailSource": "tiktok_cover",
+        "ffmpegFramesExtracted": 0
+      },
+      "referenceSimilarity": 0.874,
+      "cachedGeminiVerdict": {
+        "id": "7690894906847481102",
+        "approved": true,
+        "verdict": "variant",
+        "verdictTier": "same_design_variant",
+        "reasonCode": null,
+        "failedHardAttributes": [],
+        "failedSoftAttributes": [
+          "red trim color",
+          "different color stitching"
+        ],
+        "verifiedByAi": true,
+        "formFactorMatches": true,
+        "mechanismMatches": true,
+        "colorMatches": false,
+        "mustNotBeHit": [],
+        "confidence": 1,
+        "referenceSimilarity": 0.874,
+        "reasonAr": "هذا هو نفس المنبة بكافة مفالباء الأساسى (أكواب؂ أرفرسة؂ ؤفة أفقفة)؂ مع اءافة إففار أأمر كأراف أألوان بألوان.",
+        "stage": "visual_stage2_gemini"
+      },
+      "finalTierAssigned": "same_design_variant",
+      "ownerGroundTruth": "incorrect_product",
+      "whyItEarnedMatchBadge": "Evaluated on a single cover thumbnail (0 ffmpeg keyframes) with SOFT-downgraded stitching/slot attributes and side-by-side yes-bias."
+    }
+  ],
+  "rootCauses": [
+    "1. Wrong/Degraded Identity Card (createManualIdentityCard overwrote category/formFactor/mechanism with \"General\"/\"Standard\", downgraded stitching/slot/dimensions to SOFT via SOFT_ATTRIBUTE_PATTERNS, and lacked same-category look-alikes in mustNotBe such as rear-seat armrest boxes and wireless-charging console boxes).",
+    "2. Thumbnail + Caption Leakage (0 ffmpeg keyframes extracted; Gemini saw only 1 cover thumbnail + seller caption and relied on text keywords like \"cup holder, tissue box\").",
+    "3. Side-by-Side Prompt Yes-Bias & Category-Level Verification (verify.ts asked Gemini \"do these show the exact same product design?\" while showing both images together instead of blind describe-then-compare).",
+    "4. Ungated Badges & Misleading Link UI (Exact badge was granted without V3 multi-frame evidence, and AssetCard.tsx rendered a red \"الرابط مش شغال\" button on every card without distinguishing alive vs blocked vs dead links)."
+  ]
+}

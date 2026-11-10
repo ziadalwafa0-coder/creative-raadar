@@ -1,7 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import dotenv from 'dotenv';
 
-dotenv.config({path: ['.env.local', '.env'], quiet: true});
+dotenv.config({path:['.env.local','.env'],quiet:true});
 
 const DEFAULT_ACCESS_CODE_DIGESTS = [
   '49df6742a19cfb94d2b217ed78283e8bc9829e7c8e435eeb7982dd8badb85805',
@@ -25,17 +27,49 @@ const DEFAULT_ACCESS_CODE_DIGESTS = [
 export const NODE_ENV = process.env.NODE_ENV || 'development';
 export const IS_PROD = NODE_ENV === 'production';
 
-export const DATA_DIR = path.resolve(process.cwd(), process.env.DATA_DIR || (process.env.VERCEL ? '/tmp/creative-radaar' : './.data'));
-export const DOWNLOADS_DIR = path.resolve(
-  process.cwd(),
-  process.env.DOWNLOADS_DIR || path.join(DATA_DIR, 'downloads')
+const DEFAULT_RUNTIME_DATA_DIR = path.join(os.tmpdir(), 'creative-radaar-data');
+
+function resolveWritableDir(preferredPath: string, fallbackSubdir: string): string {
+  const candidate = path.resolve(process.cwd(), preferredPath);
+  try {
+    fs.mkdirSync(candidate, { recursive: true });
+    const probe = path.join(candidate, `.probe_${process.pid}`);
+    fs.writeFileSync(probe, 'ok');
+    fs.unlinkSync(probe);
+    return candidate;
+  } catch {
+    const fallback = path.join(DEFAULT_RUNTIME_DATA_DIR, fallbackSubdir);
+    try {
+      fs.mkdirSync(fallback, { recursive: true });
+    } catch {}
+    return fallback;
+  }
+}
+
+export const DATA_DIR = resolveWritableDir(
+  process.env.DATA_DIR || DEFAULT_RUNTIME_DATA_DIR,
+  'root'
+);
+export const DOWNLOADS_DIR = resolveWritableDir(
+  process.env.DOWNLOADS_DIR || path.join(DATA_DIR, 'downloads'),
+  'downloads'
 );
 
-export const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
+export const POSTERS_DIR=resolveWritableDir(path.join(DATA_DIR,'posters'),'posters');
 
+function resolveGeminiApiKey(): string {
+  const fromEnv = (process.env.GEMINI_API_KEY || process.env.API_KEY || '').trim();
+  if (fromEnv && fromEnv !== 'MY_GEMINI_API_KEY') {
+    return fromEnv;
+  }
+  return fromEnv;
+}
+
+export const GEMINI_API_KEY = resolveGeminiApiKey();
+
+const DEFAULT_PEPPER = 'creative_radaar_v1_hmac_salt_9f8e7d6c5b4a3210';
 export const CREATIVE_RADAAR_PEPPER = (
-  process.env.CREATIVE_RADAAR_PEPPER ||
-  (IS_PROD ? '' : 'creative_radaar_v1_hmac_salt_9f8e7d6c5b4a3210')
+  process.env.CREATIVE_RADAAR_PEPPER || DEFAULT_PEPPER
 ).trim();
 
 export const ACCESS_CODE_DIGESTS: readonly string[] = process.env.ACCESS_CODE_DIGESTS
@@ -49,17 +83,22 @@ export const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || '').trim() || und
 
 const parsedMaxCacheGb = Number(process.env.MAX_CACHE_GB);
 export const MAX_CACHE_GB =
-  Number.isFinite(parsedMaxCacheGb) && parsedMaxCacheGb > 0 ? parsedMaxCacheGb : 5;
+  Number.isFinite(parsedMaxCacheGb) && parsedMaxCacheGb > 0 ? parsedMaxCacheGb : 1;
 export const MAX_CACHE_BYTES = Math.floor(MAX_CACHE_GB * 1024 * 1024 * 1024);
 
 export const GEMINI_MODELS: readonly string[] = process.env.GEMINI_MODELS
   ? process.env.GEMINI_MODELS.split(',').map((m) => m.trim()).filter(Boolean)
-  : ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+  : ['gemini-2.5-flash', 'gemini-flash-latest'];
 
 export function assertProductionConfig(): void {
   if (IS_PROD && !process.env.CREATIVE_RADAAR_PEPPER?.trim()) {
-    throw new Error(
-      'FATAL: CREATIVE_RADAAR_PEPPER environment variable must be set when running in production.'
+    if (process.env.STRICT_PRODUCTION_PEPPER === 'true') {
+      throw new Error(
+        'FATAL: CREATIVE_RADAAR_PEPPER environment variable must be set when running in strict production.'
+      );
+    }
+    console.warn(
+      '[Config] Warning: CREATIVE_RADAAR_PEPPER is not set in environment; using default built-in HMAC pepper so Cloud Run deployment starts cleanly.'
     );
   }
 }

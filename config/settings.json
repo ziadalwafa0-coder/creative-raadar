@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-04T16:00:00.000Z",
+  "strictnessPreset": "balanced",
+  "matchMode": "same_design",
+  "includeSimilar": false,
+  "thresholds": {
+    "stage1ClipMin": 0.42,
+    "stage1TikTokClipMin": 0.34,
+    "stage2ConfidenceMin": 0.60,
+    "stage2MustNotBeConfidence": 0.58,
+    "videoDedupeHamming": 8
+  },
+  "searchDepth": {
+    "maxPagesPerQuery": 4,
+    "maxQueries": 8,
+    "maxListingsToInspect": 200,
+    "consecutiveZeroYieldPagesStop": 2,
+    "sortVariants": ["relevance", "review-rank", "popularity-rank"],
+    "enableAnchorSnowball": true,
+    "enableRealKeyframeCheck": true
+  },
+  "marketplaces": {
+    "US": true,
+    "UK": true,
+    "DE": false,
+    "CA": false,
+    "AE": false,
+    "SA": false,
+    "EG": false
+  },
+  "sourceCaps": {
+    "amazonMax": 500,
+    "tiktokMax": 500
+  },
+  "geminiDailyBudget": 1500,
+  "tiktokProviders": {
+    "order": ["serp-hydration", "url-import", "playwright", "apify"],
+    "enabled": {
+      "serp-hydration": true,
+      "url-import": true,
+      "playwright": false,
+      "apify": false
+    }
+  },
+  "attributeStrengthOverrides": {}
+}
